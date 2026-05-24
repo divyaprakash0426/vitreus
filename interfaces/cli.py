@@ -62,12 +62,35 @@ def analyze(
 def apply_manifest(
     csv_path: Annotated[Path, typer.Argument(exists=True, dir_okay=False)],
     manifest_path: Annotated[Path, typer.Argument(exists=True, dir_okay=False)],
+    output: Annotated[
+        Optional[Path],
+        typer.Option("--output", "-o", help="Save modified sheet to this CSV path. Highlights written to <output>_highlights.json."),
+    ] = None,
+    sheet_name: Annotated[str, typer.Option("--sheet", "-s")] = "Sheet1",
 ) -> None:
-    """Apply a manifest against a CSV-backed in-memory sheet and print the summary."""
-    snapshot = WorkbookSnapshot.from_csv(str(csv_path))
+    """Apply a manifest against a CSV-backed in-memory sheet and print the summary.
+
+    With --output, write_value and formula changes are saved back to a new CSV.
+    Cell highlights (which cannot be stored in CSV) are written to a sidecar
+    <output>_highlights.json file alongside the CSV.
+    """
+    snapshot = WorkbookSnapshot.from_csv(str(csv_path), sheet_name=sheet_name)
     driver = InMemoryCalcDriver(snapshot)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     summary = driver.execute_manifest(manifest)
+
+    if output is not None:
+        snapshot.save_csv(str(output), sheet_name=sheet_name)
+        if driver.formats:
+            sidecar = output.parent / (output.stem + "_highlights.json")
+            sidecar.write_text(
+                json.dumps({cell: {"background": fmt.background} for cell, fmt in driver.formats.items()}, indent=2),
+                encoding="utf-8",
+            )
+            typer.echo(f"Saved: {output}  |  Highlights: {sidecar}", err=True)
+        else:
+            typer.echo(f"Saved: {output}", err=True)
+
     typer.echo(json.dumps({"applied": summary.applied, "errors": summary.errors}))
 
 

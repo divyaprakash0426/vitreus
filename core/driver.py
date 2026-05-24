@@ -32,6 +32,18 @@ class WorkbookSnapshot:
             rows = [[_coerce_value(value) for value in row] for row in csv.reader(handle)]
         return cls(sheets={sheet_name: rows})
 
+    def to_csv(self, sheet_name: str = "Sheet1") -> str:
+        """Return the sheet as a CSV string (all rows, all columns)."""
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        writer.writerows(self.sheets.get(sheet_name, []))
+        return buffer.getvalue()
+
+    def save_csv(self, path: str, sheet_name: str = "Sheet1") -> None:
+        """Write the sheet back to a CSV file on disk."""
+        with open(path, "w", newline="", encoding="utf-8") as handle:
+            csv.writer(handle).writerows(self.sheets.get(sheet_name, []))
+
     def range_to_csv(self, range_name: str) -> str:
         rows = self._slice(range_name)
         buffer = io.StringIO()
