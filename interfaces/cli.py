@@ -34,8 +34,21 @@ def analyze(
         Optional[str], typer.Option("--api-key", envvar="GEMINI_API_KEY", help="Google AI Studio API key.")
     ] = None,
     model: Annotated[Optional[str], typer.Option("--model", "-m", help="Override model name for the chosen backend.")] = None,
+    output: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--output", "-o",
+            help="Save result directly to this file (.csv or .xlsx). Skips printing the manifest.",
+        ),
+    ] = None,
 ) -> None:
-    """Analyze a CSV snapshot and print a JSON action manifest."""
+    """Analyze a CSV or XLSX workbook and either print the JSON manifest or save the result with --output.
+
+    \b
+    --output result.csv   Saves modified data. Highlights → _highlights.json sidecar.
+                          ⚠ CSV cannot store colors or formulas natively.
+    --output result.xlsx  Saves cell values, formulas, AND highlight colors in one file.
+    """
     selected_backend = None
     if backend == "ollama":
         selected_backend = OllamaBackend(model=model or "gemma4:31b")
@@ -49,12 +62,48 @@ def analyze(
             raise typer.Exit(code=1)
         selected_backend = GoogleAIBackend(api_key=key, model=model or "gemma-4-31b-it")
 
-    snapshot = WorkbookSnapshot.from_csv(str(csv_path), sheet_name=sheet_name)
-    max_row = len(snapshot.sheets[sheet_name])
-    max_col = len(snapshot.sheets[sheet_name][0]) if max_row else 1
-    context = snapshot.range_to_json(f"{sheet_name}!A1:{_column_name(max_col - 1)}{max_row}")
-    manifest = VitreusReasoning(backend=selected_backend).plan_action_sync(query, context, sheet_name=sheet_name)
-    typer.echo(json.dumps(manifest, indent=2))
+    snapshot = WorkbookSnapshot.from_file(str(csv_path), sheet_name=sheet_name)
+    active_sheet = sheet_name if sheet_name in snapshot.sheets else next(iter(snapshot.sheets))
+    sheet_data = snapshot.sheets[active_sheet]
+    max_row = len(sheet_data)
+    max_col = len(sheet_data[0]) if max_row else 1
+    context = snapshot.range_to_json(f"{active_sheet}!A1:{_column_name(max_col - 1)}{max_row}")
+    manifest = VitreusReasoning(backend=selected_backend).plan_action_sync(query, context, sheet_name=active_sheet)
+
+    if output is None:
+        # Default: print the manifest JSON so it can be piped or inspected.
+        typer.echo(json.dumps(manifest, indent=2))
+        return
+
+    # One-shot mode: apply the manifest and save to the output file.
+    driver = InMemoryCalcDriver(snapshot)
+    driver.execute_manifest(manifest)
+    summary_applied = len([a for a in manifest.get("actions", []) if a.get("type") in ("write_value", "formula", "highlight")])
+
+    ext = output.suffix.lower()
+    if ext == ".xlsx":
+        snapshot.save_xlsx(str(output), sheet_name=active_sheet, formats=driver.formats)
+    else:
+        # CSV: save data; colors go to a sidecar.
+        snapshot.save_csv(str(output), sheet_name=active_sheet)
+        typer.echo(
+            f"⚠ CSV format cannot store cell colors or formulas.\n"
+            f"  • write_value changes are saved in {output.name}\n"
+            f"  • Highlight colors → {output.stem}_highlights.json\n"
+            f"  Tip: use --output result.xlsx to preserve everything in one file.",
+            err=True,
+        )
+        if driver.formats:
+            sidecar = output.parent / (output.stem + "_highlights.json")
+            sidecar.write_text(
+                json.dumps(
+                    {cell: {"background": fmt.background} for cell, fmt in driver.formats.items()},
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+    typer.echo(json.dumps({"applied": summary_applied, "saved": str(output), "errors": []}))
 
 
 
@@ -74,22 +123,28 @@ def apply_manifest(
     Cell highlights (which cannot be stored in CSV) are written to a sidecar
     <output>_highlights.json file alongside the CSV.
     """
-    snapshot = WorkbookSnapshot.from_csv(str(csv_path), sheet_name=sheet_name)
+    snapshot = WorkbookSnapshot.from_file(str(csv_path), sheet_name=sheet_name)
+    active_sheet = sheet_name if sheet_name in snapshot.sheets else next(iter(snapshot.sheets))
     driver = InMemoryCalcDriver(snapshot)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     summary = driver.execute_manifest(manifest)
 
     if output is not None:
-        snapshot.save_csv(str(output), sheet_name=sheet_name)
-        if driver.formats:
-            sidecar = output.parent / (output.stem + "_highlights.json")
-            sidecar.write_text(
-                json.dumps({cell: {"background": fmt.background} for cell, fmt in driver.formats.items()}, indent=2),
-                encoding="utf-8",
-            )
-            typer.echo(f"Saved: {output}  |  Highlights: {sidecar}", err=True)
-        else:
+        ext = output.suffix.lower()
+        if ext == ".xlsx":
+            snapshot.save_xlsx(str(output), sheet_name=active_sheet, formats=driver.formats)
             typer.echo(f"Saved: {output}", err=True)
+        else:
+            snapshot.save_csv(str(output), sheet_name=active_sheet)
+            if driver.formats:
+                sidecar = output.parent / (output.stem + "_highlights.json")
+                sidecar.write_text(
+                    json.dumps({cell: {"background": fmt.background} for cell, fmt in driver.formats.items()}, indent=2),
+                    encoding="utf-8",
+                )
+                typer.echo(f"Saved: {output}  |  Highlights: {sidecar}", err=True)
+            else:
+                typer.echo(f"Saved: {output}", err=True)
 
     typer.echo(json.dumps({"applied": summary.applied, "errors": summary.errors}))
 

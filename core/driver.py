@@ -27,6 +27,32 @@ class WorkbookSnapshot:
     sheets: dict[str, list[list[Any]]]
 
     @classmethod
+    def from_xlsx(cls, path: str, sheet_name: str | None = None, all_sheets: bool = False) -> "WorkbookSnapshot":
+        """Load an Excel workbook snapshot. Reads the first sheet by default."""
+        try:
+            import openpyxl
+        except ImportError as exc:
+            raise RuntimeError("XLSX input requires openpyxl.\n  Install: uv sync --extra integrations") from exc
+
+        wb = openpyxl.load_workbook(path, data_only=False)
+        if all_sheets:
+            sheets = {name: [[cell.value for cell in row] for row in wb[name].iter_rows()] for name in wb.sheetnames}
+        else:
+            if sheet_name and sheet_name in wb.sheetnames:
+                target = sheet_name
+            else:
+                target = wb.sheetnames[0]
+            sheets = {target: [[cell.value for cell in row] for row in wb[target].iter_rows()]}
+        return cls(sheets=sheets)
+
+    @classmethod
+    def from_file(cls, path: str, sheet_name: str = "Sheet1") -> "WorkbookSnapshot":
+        """Auto-detect CSV vs XLSX from extension."""
+        if path.lower().endswith((".xlsx", ".xlsm", ".xls")):
+            return cls.from_xlsx(path, sheet_name=sheet_name)
+        return cls.from_csv(path, sheet_name=sheet_name)
+
+    @classmethod
     def from_csv(cls, path: str, sheet_name: str = "Sheet1") -> "WorkbookSnapshot":
         with open(path, newline="", encoding="utf-8") as handle:
             rows = [[_coerce_value(value) for value in row] for row in csv.reader(handle)]
@@ -38,6 +64,32 @@ class WorkbookSnapshot:
         writer = csv.writer(buffer)
         writer.writerows(self.sheets.get(sheet_name, []))
         return buffer.getvalue()
+
+    def save_xlsx(self, path: str, sheet_name: str = "Sheet1", formats: dict[str, "CellFormat"] | None = None) -> None:
+        """Write the sheet to an Excel file with cell values, formulas, and highlight colors."""
+        try:
+            import openpyxl
+            from openpyxl.styles import PatternFill
+        except ImportError as exc:
+            raise RuntimeError(
+                "XLSX export requires openpyxl.\n  Install: uv sync --extra integrations"
+            ) from exc
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = sheet_name
+
+        for row in self.sheets.get(sheet_name, []):
+            ws.append(row)
+
+        for cell_ref, fmt in (formats or {}).items():
+            # cell_ref is like "Sheet1!A3"; strip the sheet prefix
+            ref = cell_ref.split("!")[-1]
+            if fmt.background:
+                color = fmt.background.lstrip("#")
+                ws[ref].fill = PatternFill(fill_type="solid", fgColor=color)
+
+        wb.save(path)
 
     def save_csv(self, path: str, sheet_name: str = "Sheet1") -> None:
         """Write the sheet back to a CSV file on disk."""

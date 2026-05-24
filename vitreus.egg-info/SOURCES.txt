@@ -10,6 +10,7 @@ interfaces/gui_overlay.py
 tests/test_backends.py
 tests/test_cli.py
 tests/test_driver.py
+tests/test_output.py
 tests/test_reasoning.py
 tests/test_vision.py
 vitreus.egg-info/PKG-INFO
