@@ -164,9 +164,11 @@ Recent smoke-test result:
 {"applied": 1, "saved": "/tmp/vitreus_xlsx_test.xlsx", "errors": []}
 ```
 
-### Recording the demo
+### Demo recording flow
 
-I included repeatable command scripts for terminal recording:
+For the final DEV video, the clearest recording path is the XLSX workflow because it shows both the model reasoning and the visible spreadsheet result.
+
+Reusable command references are included for broader testing:
 
 ```bash
 bash examples/test_commands.sh
@@ -178,23 +180,33 @@ or, for Nushell:
 nu examples/test_commands.nu
 ```
 
-For a DEV post video, I would record these scenes with `asciinema`:
+For a focused manual recording, use this flow:
 
 ```bash
 asciinema rec vitreus-demo.cast
-bash examples/test_commands.sh
+uv run vitreus models
+uv run vitreus analyze examples/test_workbook.xlsx \
+  "In the Expenses sheet, highlight rows where Annual_Actual exceeds Annual_Budget in orange and write OVER BUDGET in the Notes column" \
+  --backend google \
+  --sheet Expenses
+uv run vitreus analyze examples/test_workbook.xlsx \
+  "In the Expenses sheet, highlight rows where Annual_Actual exceeds Annual_Budget in orange and write OVER BUDGET in the Notes column" \
+  --backend google \
+  --sheet Expenses \
+  --output /tmp/vitreus-demo-output.xlsx
+libreoffice --calc /tmp/vitreus-demo-output.xlsx
 exit
 asciinema play vitreus-demo.cast
 asciinema upload vitreus-demo.cast
 ```
 
-Suggested video flow:
+The video should show:
 
 1. Show `uv run vitreus models`.
-2. Run the over-budget CSV example and show the JSON manifest.
-3. Run `--output /tmp/vitreus_result.xlsx`.
-4. Open the XLSX result in LibreOffice Calc and show the highlighted rows.
-5. Run the multi-sheet XLSX example with `--sheet Expenses`.
+2. Preview the original `Expenses` sheet in `examples/test_workbook.xlsx`.
+3. Run the Google AI Studio prompt and show the JSON manifest.
+4. Run the same prompt with `--output /tmp/vitreus-demo-output.xlsx`.
+5. Open the XLSX result in LibreOffice Calc and show the highlighted rows plus `OVER BUDGET` notes.
 
 ---
 
