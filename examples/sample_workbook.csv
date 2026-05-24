@@ -1,0 +1,11 @@
+Name,Department,Q1_Target,Q1_Actual,Q2_Target,Q2_Actual,Score,Status,Budget,Spent,Notes
+Ada Lovelace,Engineering,50000,52000,55000,48000,92,Active,120000,98000,Strong Q1 but missed Q2
+Alan Turing,Engineering,45000,30000,50000,55000,65,Under Review,110000,135000,Over budget by 25k
+Grace Hopper,Marketing,60000,62000,65000,63000,88,Active,95000,90000,
+Linus Torvalds,Engineering,55000,57000,60000,61000,95,Active,130000,125000,Consistent top performer
+Barbara Liskov,Research,40000,38000,42000,35000,72,At Risk,85000,80000,Missed Q2 target
+Bjarne Stroustrup,Engineering,48000,45000,52000,49000,78,Active,115000,112000,Slightly below target
+Margaret Hamilton,Operations,55000,55000,58000,60000,91,Active,100000,99000,Delivered on budget
+Dennis Ritchie,Research,42000,28000,44000,25000,55,Under Review,90000,108000,Over budget and underperforming
+Ken Thompson,Operations,50000,51000,53000,52000,85,Active,105000,100000,
+Guido van Rossum,Marketing,58000,60000,62000,58000,80,Active,88000,85000,Slight Q2 dip
