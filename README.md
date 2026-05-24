@@ -1,0 +1,91 @@
+# Vitreus
+
+Vitreus is a local-first agentic spreadsheet assistant for LibreOffice Calc. It turns workbook ranges, charts, and receipt images into structured context for Gemma 4, then returns auditable JSON manifests that can highlight cells, write values, and apply formulas.
+
+The default model target is **Gemma 4 31B Dense** because spreadsheet work benefits from a large context window and stronger reasoning over long tabular inputs. Lightweight Gemma 4 4B deployments can still be used as drafter or edge assistants.
+
+## Quick start
+
+```bash
+uv sync --extra dev
+uv run pytest
+uv run vitreus models
+```
+
+## Running Vitreus
+
+Vitreus supports three backends. Pick the one that fits your environment.
+
+### 1. Fallback mode (no model required)
+
+Uses a deterministic built-in planner — no LLM, no API keys needed. Great for CI, testing, or trying the manifest pipeline without any AI setup.
+
+```bash
+uv run vitreus analyze scores.csv "Highlight rows that need review"
+```
+
+### 2. Local Ollama (Gemma 4 31B Dense — recommended)
+
+Runs the full Gemma 4 31B Dense model locally via Ollama. Requires Ollama to be installed and running.
+
+```bash
+# One-time setup
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull gemma4:31b
+uv sync --extra integrations
+
+# Run
+uv run vitreus analyze scores.csv "Summarise budget totals" --backend ollama
+
+# Use the lighter 4B model on edge hardware
+uv run vitreus analyze scores.csv "Summarise budget totals" --backend ollama --model gemma4:4b
+```
+
+### 3. Google AI Studio API key (Gemma 4 via cloud)
+
+Calls Google AI Studio with your API key — no local GPU required.
+
+```bash
+# Get a free key at https://aistudio.google.com/apikey
+uv sync --extra integrations
+
+# Set key in environment (or pass inline with --api-key)
+export GEMINI_API_KEY=your_key_here
+uv run vitreus analyze scores.csv "Flag expenses over budget" --backend google
+
+# Inline key + override model name
+uv run vitreus analyze scores.csv "Flag expenses over budget" \
+  --backend google \
+  --api-key YOUR_KEY \
+  --model gemma-4-31b-it
+```
+
+> **Model name note:** The Google AI Studio model identifier for Gemma 4 31B Dense is assumed to be `gemma-4-31b-it`. Check [https://ai.google.dev/models](https://ai.google.dev/models) for the exact name available in your region.
+
+## Applying a manifest
+
+```bash
+# Analyze and save the manifest
+uv run vitreus analyze scores.csv "Highlight rows that need review" > manifest.json
+
+# Apply the manifest to the CSV snapshot
+uv run vitreus apply-manifest scores.csv manifest.json
+```
+
+## Vision (multimodal)
+
+```bash
+# Prepare a chart or receipt image for Gemma 4 multimodal reasoning
+uv run vitreus vision chart.png --purpose chart
+uv run vitreus vision receipt.jpg --purpose receipt
+```
+
+## Development
+
+```bash
+uv sync --extra dev
+uv run pytest -q          # all tests
+uv run pytest -q tests/test_backends.py  # backend-specific tests
+```
+
+LibreOffice, PyUNO, Ollama, and cloud endpoints are optional integrations. The core package and tests run without those services by using explicit adapter seams and deterministic fallback planning.

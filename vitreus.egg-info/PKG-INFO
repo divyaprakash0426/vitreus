@@ -1,0 +1,31 @@
+Metadata-Version: 2.4
+Name: vitreus
+Version: 0.1.0
+Summary: Local-first Gemma 4 spreadsheet intelligence for LibreOffice Calc.
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: pillow>=11.0.0
+Requires-Dist: pydantic>=2.10.0
+Requires-Dist: typer>=0.15.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8.3.0; extra == "dev"
+Provides-Extra: integrations
+Requires-Dist: ollama>=0.4.0; extra == "integrations"
+Requires-Dist: pydantic-ai>=0.0.24; extra == "integrations"
+Requires-Dist: google-genai>=1.0.0; extra == "integrations"
+
+# Vitreus
+
+Vitreus is a local-first agentic spreadsheet assistant for LibreOffice Calc. It turns workbook ranges, charts, and receipt images into structured context for Gemma 4, then returns auditable JSON manifests that can highlight cells, write values, and apply formulas.
+
+The default model target is **Gemma 4 31B Dense** because spreadsheet work benefits from a large context window and stronger reasoning over long tabular inputs. Lightweight Gemma 4 4B deployments can still be used as drafter or edge assistants.
+
+## Quick start
+
+```bash
+uv sync --extra dev
+uv run pytest
+uv run vitreus models
+```
+
+LibreOffice, PyUNO, Ollama, and cloud endpoints are optional integrations. The core package and tests run without those services by using explicit adapter seams and deterministic fallback planning.

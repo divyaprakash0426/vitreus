@@ -1,0 +1,60 @@
+Vitreus: Local-First Agentic Spreadsheet Intelligence1. Project SummaryVitreus is a local-first AI agent designed to bridge the gap between complex spreadsheet data and intuitive natural language. By utilizing Gemma 4’s massive 256K context window (31B) and native multimodal capabilities, Vitreus allows users to "talk" to their LibreOffice Calc sheets in real-time. It extracts raw data via the PyUNO bridge and uses vision to interpret charts and physical receipts, all while ensuring data privacy by running entirely on local hardware (via Ollama) or secure enterprise endpoints (Google AI Studio).
+
+2. Project Structure
+
+vitreus/
+├── core/
+│   ├── driver.py          # PyUNO connection and sheet manipulation
+│   ├── reasoning.py       # LLM orchestration (Ollama/Google AI Studio)
+│   └── vision.py          # Multimodal/OCR processing logic
+├── interfaces/
+│   ├── cli.py             # Nushell-ready CLI interface
+│   └── gui_overlay.py     # Optional transparent HUD for live feedback
+├── scripts/
+│   ├── calc.nu            # Nushell plugin for Vitreus
+│   └── setup_arch.sh      # Arch Linux environment configuration
+├── AGENTS.md              # System prompts and tool-calling definitions
+└── pyproject.toml         # Dependency management (uv)
+
+3. Tech Stack & LibrariesInference Engine: Ollama (Local) with Gemma 4 31B Dense and 4B Assistant drafter.Cloud API: Google AI Studio (Gemini API for Gemma 4) for high-scale reasoning.Spreadsheet Bridge: PyUNO (Native LibreOffice) + unotools (Abstraction layer).Agent Framework: PydanticAI for structured tool-calling and schema validation.Vision: Pillow for image preprocessing before feeding to Gemma 4's multimodal encoder.
+
+4. Key Program Files (Excerpts)
+core/driver.py (The Bridge)This file handles the socket connection to the visible LibreOffice instance.
+
+import uno
+from unotools import CalcDocument
+
+class VitreusDriver:
+    def __init__(self, port=2002):
+        self.port = port
+        self.doc = self._connect()
+
+    def _connect(self):
+        # standard UNO connection logic
+        pass
+
+    def get_sheet_data(self, range_name):
+        # Extracts data into CSV/JSON for Gemma 4 context
+        pass
+
+    def execute_manifest(self, manifest):
+        # Executes JSON commands (formatting, formulas, highlights)
+        pass
+
+core/reasoning.py (The Brain)Handles the Multi-Token Prediction (MTP) logic and context management.import ollama
+from pydantic_ai import Agent
+
+class VitreusReasoning:
+    def __init__(self, use_cloud=False):
+        self.model = "gemma4:31b" if not use_cloud else "google/gemma-4"
+        self.drafter = "gemma4:31b-assistant" # For MTP speedup
+
+    async def plan_action(self, user_query, sheet_context):
+        # Orchestrates the 128K context window injection
+        pass
+        
+5. Implementation Roadmap
+Phase 1: The Invisible Hand. Establish a stable PyUNO connection to a visible Calc window and execute basic "Cell Highlighting."
+Phase 2: The Deep Context. Implement a "Data-to-Prompt" pipeline that fits entire workbooks into Gemma 4's context window.
+Phase 3: Visual Witness. Integrate multimodal input to explain live charts or import data from receipt photos.
+Phase 4: Shell Sync. Finalize the calc.nu script to allow terminal users to pipe shell results directly into formatted spreadsheet tables.

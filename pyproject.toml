@@ -1,0 +1,35 @@
+[project]
+name = "vitreus"
+version = "0.1.0"
+description = "Local-first Gemma 4 spreadsheet intelligence for LibreOffice Calc."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pillow>=11.0.0",
+    "pydantic>=2.10.0",
+    "typer>=0.15.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+]
+integrations = [
+    "ollama>=0.4.0",
+    "pydantic-ai>=0.0.24",
+    "google-genai>=1.0.0",
+]
+
+[project.scripts]
+vitreus = "interfaces.cli:app"
+
+[build-system]
+requires = ["setuptools>=75.0.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["core*", "interfaces*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
