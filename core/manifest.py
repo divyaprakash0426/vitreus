@@ -251,6 +251,49 @@ def parse_json_object(text: str, prefer_keys: tuple[str, ...] = PREFERRED_KEYS) 
     return candidates[0]
 
 
+def canonical_ref(ref: str) -> str:
+    """Normalise `'My Sheet'!a1:b2` → `My Sheet!A1:B2` (unquote sheet, upper-case cells)."""
+    text = str(ref).strip()
+    if "!" not in text:
+        return text.upper()
+    sheet, _, cells = text.rpartition("!")
+    return f"{canonical_sheet(sheet)}!{cells.upper()}"
+
+
+def canonical_sheet(sheet: str) -> str:
+    text = str(sheet).strip()
+    if len(text) >= 2 and text[0] == text[-1] == "'":
+        return text[1:-1].replace("''", "'")
+    return text
+
+
+def _canonicalise_refs(actions: list[Any]) -> None:
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        for field in ("range", "cell", "data_range", "anchor"):
+            if isinstance(action.get(field), str):
+                action[field] = canonical_ref(action[field])
+        if isinstance(action.get("sheet"), str):
+            action["sheet"] = canonical_sheet(action["sheet"])
+        for field in ("column", "by_column"):
+            if isinstance(action.get(field), str):
+                action[field] = action[field].strip().upper()
+
+
+RISKY_FORMULA_RE = re.compile(r"\b(WEBSERVICE|DDE|HYPERLINK|IMPORTDATA|IMPORTXML|IMPORTHTML|IMPORTRANGE|FILTERXML|ENCODEURL)\s*\(", re.IGNORECASE)
+
+
+def risky_formulas(manifest: Manifest) -> list[tuple[str, str]]:
+    """(target, formula) pairs for formulas that reach outside the workbook (web, DDE, links)."""
+    found: list[tuple[str, str]] = []
+    for action in manifest.actions:
+        formula = getattr(action, "formula", None)
+        if formula and RISKY_FORMULA_RE.search(formula):
+            found.append((getattr(action, "cell", None) or getattr(action, "range", ""), formula))
+    return found
+
+
 def _check_ref(ref: str, known: set[str], field: str, prefix: str, errors: list[str]) -> None:
     match = RANGE_RE.match(str(ref))
     if not match:
@@ -276,6 +319,7 @@ def validate_manifest(raw: dict[str, Any], sheet_names: set[str]) -> Manifest:
             errors.append(f"actions[{index}]: Unsupported action type: {action.get('type')}")
     if errors:
         raise ManifestValidationError(errors)
+    _canonicalise_refs(actions)
 
     try:
         manifest = Manifest.model_validate(raw)

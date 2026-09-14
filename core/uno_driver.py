@@ -252,15 +252,23 @@ class UnoDriver:
         process = self._ensure_process()
         if process.stdin is None:
             raise RuntimeError("UNO bridge stdin is not available")
+        line = ""
         try:
             process.stdin.write(json.dumps(payload, separators=(",", ":")) + "\n")
             process.stdin.flush()
         except (BrokenPipeError, OSError) as exc:
+            # The bridge died before accepting input; it may have reported why on stdout.
             line = process.stdout.readline() if process.stdout else ""
             if not line:
                 tail = self._stderr_tail(process)
                 raise RuntimeError(f"UNO bridge died before accepting a request. {tail}".strip()) from exc
-        line = self._readline_with_timeout(process)
+        if not line:
+            try:
+                line = self._readline_with_timeout(process)
+            except RuntimeError:
+                # A late reply would be mistaken for the next request's answer; drop the bridge instead.
+                self.close()
+                raise
         if not line:
             tail = self._stderr_tail(process)
             raise RuntimeError(f"UNO bridge died without a response. {tail}".strip())

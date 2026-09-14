@@ -118,6 +118,7 @@ def test_google_posts_system_instruction_contents_and_image_parts():
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen["url"] = str(request.url)
+        seen["key_header"] = request.headers.get("x-goog-api-key")
         seen["body"] = json.loads(request.content)
         return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": "reply"}]}}]})
 
@@ -125,7 +126,7 @@ def test_google_posts_system_instruction_contents_and_image_parts():
 
     assert backend.chat(MESSAGES + [{"role": "assistant", "content": "ok"}, {"role": "user", "content": "go"}], images=[PNG]) == "reply"
     assert seen["url"].startswith("https://generativelanguage.googleapis.com/v1beta/models/gemma-4-31b-it:generateContent")
-    assert "key=secret" in seen["url"]
+    assert seen["key_header"] == "secret" and "secret" not in seen["url"]
     assert seen["body"]["systemInstruction"]["parts"][0]["text"] == "You are Vitreus."
     roles = [c["role"] for c in seen["body"]["contents"]]
     assert roles == ["user", "model", "user"]
@@ -257,3 +258,34 @@ def test_make_backend_fallback_when_nothing_configured():
 
     assert isinstance(backend, FallbackBackend)
     assert "fallback" in reason.lower()
+
+
+def test_ollama_rounds_num_ctx_to_16k_steps_to_avoid_model_reloads():
+    seen = {}
+
+    def handler(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"message": {"role": "assistant", "content": "{}"}})
+
+    backend = OllamaBackend(host="http://localhost:11434", model="gemma4:31b", num_ctx=32768, client=_client(handler))
+    backend.chat([{"role": "user", "content": "x" * (35000 * 3)}])
+    first = seen["body"]["options"]["num_ctx"]
+    backend.chat([{"role": "user", "content": "x" * (44000 * 3)}])
+    second = seen["body"]["options"]["num_ctx"]
+
+    assert first == second == 49152
+
+
+def test_google_sends_api_key_in_header_not_url():
+    seen = {}
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        seen["header"] = request.headers.get("x-goog-api-key")
+        return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": "{}"}]}}]})
+
+    backend = GoogleAIBackend(api_key="sk-secret", model="gemma-4-31b-it", client=_client(handler))
+    backend.chat([{"role": "user", "content": "hi"}])
+
+    assert seen["header"] == "sk-secret"
+    assert "sk-secret" not in seen["url"]

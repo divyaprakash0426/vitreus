@@ -148,3 +148,36 @@ def test_parse_json_object_prefers_tool_call_object_over_incidental_objects():
     text = 'Let me check the data first. {"tool": "get_range", "args": {"range": "Sheet1!A1:B5"}}'
 
     assert parse_json_object(text)["tool"] == "get_range"
+
+
+def test_quoted_and_lowercase_refs_are_canonicalised():
+    raw = {
+        "summary": "",
+        "actions": [
+            {"type": "highlight", "range": "'My Sheet'!a2:c2", "color": "#f97316", "reason": "r"},
+            {"type": "write_value", "cell": "'It''s'!b3", "value": 1},
+            {"type": "insert_rows", "sheet": "'My Sheet'", "at": 2},
+        ],
+    }
+
+    manifest = validate_manifest(raw, {"My Sheet", "It's"})
+
+    assert manifest.actions[0].range == "My Sheet!A2:C2"
+    assert manifest.actions[1].cell == "It's!B3"
+    assert manifest.actions[2].sheet == "My Sheet"
+
+
+def test_risky_formulas_are_reported():
+    from core.manifest import risky_formulas
+
+    raw = {
+        "summary": "",
+        "actions": [
+            {"type": "formula", "cell": "Sheet1!A1", "formula": "=SUM(B1:B3)"},
+            {"type": "formula", "cell": "Sheet1!A2", "formula": '=WEBSERVICE("http://x")'},
+            {"type": "fill_formula", "range": "Sheet1!C1:C2", "formula": '=HYPERLINK("http://y";"go")'},
+        ],
+    }
+    manifest = validate_manifest(raw, SHEETS)
+
+    assert [ref for ref, _ in risky_formulas(manifest)] == ["Sheet1!A2", "Sheet1!C1:C2"]

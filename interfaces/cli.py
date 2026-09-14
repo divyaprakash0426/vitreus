@@ -19,7 +19,7 @@ from core.agent import AgentError, SpreadsheetAgent
 from core.backends import Backend, BackendError, FallbackBackend, make_backend, ollama_reachable
 from core.config import BACKENDS, Settings, config_template, default_config_path, load_settings
 from core.driver import ManifestSummary, WorkbookDriver, WorkbookSnapshot, diff_snapshots
-from core.manifest import Manifest, ManifestValidationError, validate_manifest
+from core.manifest import Manifest, ManifestValidationError, risky_formulas, validate_manifest
 from core.reasoning import GemmaModelChoice
 from core.vision import VisionError, VisionInput, encode_image, extract_table
 from interfaces import ui
@@ -155,6 +155,8 @@ def _plan(
         _fail(str(exc).split("\n")[0], hint=getattr(exc, "hint", ""))
     if result.tool_calls:
         ui.info(f"{result.steps} step(s), tools used: {', '.join(c['tool'] for c in result.tool_calls)}")
+    for target, formula in risky_formulas(result.manifest):
+        ui.warn(f"{target}: formula reaches outside the workbook ({formula[:80]}). Review before applying.")
     return driver, snapshot, source_name, result.manifest, agent
 
 
@@ -171,7 +173,7 @@ def _preview(manifest: Manifest, snapshot: WorkbookSnapshot) -> ManifestSummary:
 
 def _csv_warning(output: Path, manifest: Manifest) -> None:
     if output.suffix.lower() == ".csv" and any(a.type in {"highlight", "set_format", "add_chart", "add_note", "freeze_panes", "set_column_width"} for a in manifest.actions):
-        ui.warn("CSV cannot store colours/formatting: highlight and format actions are written to a <name>_highlights.json sidecar. Use an .xlsx output to keep them.")
+        ui.warn("CSV cannot store formatting: highlight colours go to a <name>_highlights.json sidecar; notes, charts, widths and freeze panes are dropped. Use an .xlsx output to keep them.")
 
 
 def _emit(payload: dict[str, Any]) -> None:
@@ -217,6 +219,8 @@ def analyze(
         source, query = args
     else:
         _fail('Usage: vitreus analyze <FILE|-> "<query>"  |  vitreus analyze --live "<query>"')
+    if live and (output is not None or in_place):
+        _fail("--live applies to the running Calc document; --output/--in-place are not used", hint="drop --live to write a file, or save from LibreOffice")
     settings = _settings(backend, model, fast, api_key, context_tokens, port)
     driver, snapshot, source_name, manifest, _agent = _plan(query, source, sheet, live, all_sheets, image, settings)
 
@@ -234,7 +238,10 @@ def analyze(
             ui.info("Aborted; nothing applied.")
             _emit(_manifest_json(manifest))
             raise typer.Exit(2)
-        summary = driver.execute_manifest(manifest)
+        try:
+            summary = driver.execute_manifest(manifest)
+        except RuntimeError as exc:
+            _fail(f"Live apply failed: {exc}", hint="check `vitreus calc status` and retry")
         ui.print_summary(summary, source_name)
         _emit({"applied": summary.applied, "errors": summary.errors, "target": source_name, "summary": manifest.summary})
         return
@@ -300,7 +307,7 @@ def chat(
     """Interactive multi-turn session with /preview, /apply, /save."""
     from interfaces.repl import run_chat
 
-    settings = _settings(backend, model, fast, api_key, context_tokens)
+    settings = _settings(backend, model, fast, api_key, context_tokens, port)
     backend_obj, _ = _backend(settings)
     driver, snapshot, source_name, active = _open_source(source, sheet, live, settings)
     focus = None if all_sheets or active is None else [active]

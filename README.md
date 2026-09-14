@@ -83,7 +83,7 @@ cp examples/sample_workbook.csv /tmp/review.csv && uv run vitreus analyze /tmp/r
 uv run vitreus analyze examples/test_workbook.xlsx "compare this receipt with expenses" --sheet Expenses --all-sheets --image receipt.jpg
 ```
 
-Options: `--output/-o`, `--in-place`, `--preview/-p`, `--live`, `--yes/-y`, `--port`, `--sheet/-s`, `--all-sheets`, `--image/-i`, `--backend/-b`, `--model/-m`, `--fast`, `--api-key`, `--context-tokens`.
+Options: `--output/-o`, `--in-place`, `--preview/-p`, `--live`, `--yes/-y`, `--port`, `--sheet/-s`, `--all-sheets`, `--image/-i`, `--backend/-b`, `--model/-m`, `--fast`, `--api-key`, `--context-tokens`. `--live` applies to the running Calc document and cannot be combined with `--output` or `--in-place`.
 
 ### `ask [FILE|-] "QUESTION"`
 
@@ -237,6 +237,14 @@ All `range`, `cell`, and `data_range` values are sheet-qualified A1 references s
 | `clear_range` | `range`, `reason` |
 | `add_sheet` | `name`, `reason` |
 | `add_chart` | `sheet`, `chart_type` (`bar`, `line`, `pie`, `scatter`), `data_range`, `title`, `anchor` default `H2`, `reason` |
+
+Notes on the file (openpyxl) driver:
+
+- Sheet references are canonicalised on validation: `'My Sheet'!a2:c2` becomes `My Sheet!A2:C2`.
+- `insert_rows`/`delete_rows` rewrite cell and range references in every formula of the workbook (references into deleted rows become `#REF!`), and keep highlight positions in step. Merged cells, defined names and chart ranges are not adjusted; use `--live` for those.
+- The model sees cached formula results when the file has them (saved by Excel/LibreOffice); files written by openpyxl carry no cached values, so formula cells show their formula text.
+- Formulas that reach outside the workbook (`WEBSERVICE`, `DDE`, `HYPERLINK`, `IMPORT*`) are never blocked, but `analyze` warns on stderr before you apply them.
+- CSV output keeps cell text exactly as read (`007`, `1e3`, `+91` stay strings); highlight colours go to a `<name>_highlights.json` sidecar and other formatting is dropped.
 
 ## Configuration
 

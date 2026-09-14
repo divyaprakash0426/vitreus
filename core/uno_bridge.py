@@ -50,8 +50,11 @@ def _parse_range(ref: str) -> tuple[str, int, int, int, int]:
         raise ValueError(f"Invalid Calc range: {ref}")
     start_col, start_row = _split_cell(match.group("start"))
     end_col, end_row = _split_cell(match.group("end") or match.group("start"))
+    sheet = match.group("sheet").strip()
+    if len(sheet) >= 2 and sheet[0] == sheet[-1] == "'":
+        sheet = sheet[1:-1].replace("''", "'")
     return (
-        match.group("sheet"),
+        sheet,
         min(start_col, end_col),
         min(start_row, end_row),
         max(start_col, end_col),
@@ -83,7 +86,9 @@ def _shift_formula(formula: str, row_offset: int) -> str:
             return match.group(0)
         return f"{col_abs}{col}{row_abs}{max(int(row) + row_offset, 1)}"
 
-    return _REF_RE.sub(repl, formula)
+    # Only rewrite references outside double-quoted string literals.
+    parts = formula.split('"')
+    return '"'.join(_REF_RE.sub(repl, part) if index % 2 == 0 else part for index, part in enumerate(parts))
 
 
 def _normalize_formula(formula: str) -> str:

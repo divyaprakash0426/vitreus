@@ -82,3 +82,22 @@ def test_chat_reports_agent_errors_and_continues():
 
     text = "\n".join(out)
     assert "valid manifest" in text and "Flagging Linus." in text
+
+
+def test_apply_reports_bridge_failures_and_keeps_the_session_alive():
+    agent, driver, backend = make([MANIFEST])
+
+    class BrokenDriver:
+        def execute_manifest(self, manifest):
+            raise RuntimeError("Timed out waiting for UNO bridge response")
+
+        def snapshot(self):
+            return driver.snapshot()
+
+    input_fn, output_fn, out = scripted_io(["flag low scores", "/apply", "/quit"])
+
+    run_chat(agent, BrokenDriver(), input_fn=input_fn, output_fn=output_fn, live=True)
+
+    text = "\n".join(out)
+    assert "Apply failed: Timed out waiting for UNO bridge response" in text
+    assert "bye" in text.lower() or "quit" in text.lower() or len(out) >= 3  # session continued to /quit

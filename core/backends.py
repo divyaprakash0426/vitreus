@@ -99,7 +99,10 @@ class OllamaBackend:
             payload_messages[_last_user_index(payload_messages)]["images"] = [_b64(img) for img in images]
         prompt_chars = sum(len(str(m.get("content", ""))) for m in payload_messages)
         # Ollama defaults to a 4K window; grow it so the workbook context is never silently truncated.
-        num_ctx = max(self.num_ctx, min(prompt_chars // 3 + 2048, 131072))
+        # Round up to 16K steps: every distinct num_ctx makes Ollama reload the model, which costs
+        # tens of seconds for a 31B model, so keep the value stable across agent steps.
+        needed = min(prompt_chars // 3 + 2048, 131072)
+        num_ctx = max(self.num_ctx, -(-needed // 16384) * 16384)
         body = {
             "model": self.model,
             "messages": payload_messages,
@@ -172,7 +175,7 @@ class GoogleAIBackend:
             body["systemInstruction"] = {"parts": system_parts}
         url = f"{self.BASE_URL}/models/{self.model}:generateContent"
         try:
-            response = self._client.post(url, params={"key": self.api_key}, json=body)
+            response = self._client.post(url, headers={"x-goog-api-key": self.api_key}, json=body)
         except httpx.HTTPError as exc:
             raise BackendError(f"Google AI request failed: {exc}", hint="check network access to generativelanguage.googleapis.com") from exc
         if response.is_error:
@@ -189,7 +192,7 @@ class GoogleAIBackend:
 
     def list_models(self) -> list[str]:
         try:
-            response = self._client.get(f"{self.BASE_URL}/models", params={"key": self.api_key, "pageSize": 200})
+            response = self._client.get(f"{self.BASE_URL}/models", headers={"x-goog-api-key": self.api_key}, params={"pageSize": 200})
             response.raise_for_status()
         except httpx.HTTPError as exc:
             raise BackendError(f"Cannot list Google AI models: {exc}", hint="verify GEMINI_API_KEY") from exc

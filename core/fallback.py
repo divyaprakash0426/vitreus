@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from core.driver import WorkbookSnapshot, coerce_value, column_name
+from core.driver import WorkbookSnapshot, column_name, parse_number
 
 REVIEW_COLOR = "#f97316"
 REVIEW_THRESHOLD = 80.0
@@ -64,12 +64,7 @@ def _match_column(name: str, lookup: dict[str, int]) -> int | None:
 
 
 def _number(value: Any) -> float | None:
-    coerced = coerce_value(value)
-    if isinstance(coerced, bool):
-        return None
-    if isinstance(coerced, int | float):
-        return float(coerced)
-    return None
+    return parse_number(value)
 
 
 def plan_fallback(query: str, snapshot: WorkbookSnapshot, sheet: str) -> dict[str, Any]:

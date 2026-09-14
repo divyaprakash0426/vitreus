@@ -97,7 +97,11 @@ def run_chat(
             if last is None:
                 output_fn("Nothing to apply yet — ask for a change first.")
                 continue
-            summary = driver.execute_manifest(last)
+            try:
+                summary = driver.execute_manifest(last)
+            except RuntimeError as exc:
+                output_fn(f"Apply failed: {exc}")
+                continue
             where = " to the live Calc document" if live else ""
             output_fn(f"Applied {summary.applied} action(s){where}." + (" Errors: " + "; ".join(summary.errors) if summary.errors else ""))
             agent.refresh(driver.snapshot())

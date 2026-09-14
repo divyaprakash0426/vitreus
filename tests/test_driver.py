@@ -336,3 +336,73 @@ def test_diff_snapshots_is_empty_for_identical_snapshots():
     snap = WorkbookSnapshot(sheets={"S": [["A"], [1]]})
 
     assert diff_snapshots(snap, snap) == []
+
+
+def test_csv_round_trip_preserves_ids_zip_codes_and_exponent_strings(tmp_path: Path):
+    text = "ID,Zip,Phone,Exp,Amount\n007,02134,+91 98,1e3,1.50\n"
+    driver = WorkbookDriver.from_csv_text(text)
+
+    out = tmp_path / "out.csv"
+    driver.save(out)
+
+    assert out.read_text(encoding="utf-8").splitlines()[1] == "007,02134,+91 98,1e3,1.50"
+
+
+def test_parse_range_accepts_quoted_sheets_and_lowercase_cells():
+    from core.driver import parse_range
+
+    parsed = parse_range("'My Sheet'!a2:c3")
+
+    assert (parsed.sheet, parsed.start_col, parsed.start_row, parsed.end_col, parsed.end_row) == ("My Sheet", 0, 1, 2, 2)
+
+
+def test_delete_rows_rewrites_dependent_formulas():
+    driver = WorkbookDriver.from_csv_text("V\n1\n2\n3\n4\n")
+    ws = driver.workbook["Sheet1"]
+    ws["B6"] = "=SUM(A2:A5)"
+    ws["C6"] = "=A5*2"
+    ws["D6"] = '=IF(A2>0,"See A2 above","")'
+    driver.workbook.create_sheet("Other")["A1"] = "=Sheet1!A4+'Sheet1'!$A$5"
+
+    driver.execute_manifest({"actions": [{"type": "delete_rows", "sheet": "Sheet1", "at": 2, "count": 1}]})
+
+    assert ws["B5"].value == "=SUM(A2:A4)"
+    assert ws["C5"].value == "=A4*2"
+    assert ws["D5"].value == '=IF(#REF!>0,"See A2 above","")'
+    assert driver.workbook["Other"]["A1"].value == "=Sheet1!A3+'Sheet1'!$A$4"
+
+
+def test_insert_rows_shifts_formulas_and_highlight_formats():
+    driver = WorkbookDriver.from_csv_text("V\n1\n2\n")
+    ws = driver.workbook["Sheet1"]
+    ws["B4"] = "=SUM(A2:A3)"
+    driver.execute_manifest({"actions": [{"type": "highlight", "range": "Sheet1!A3:A3", "color": "#f97316", "reason": "r"}]})
+
+    driver.execute_manifest({"actions": [{"type": "insert_rows", "sheet": "Sheet1", "at": 2, "count": 2}]})
+
+    assert ws["B6"].value == "=SUM(A4:A5)"
+    assert "Sheet1!A5" in driver.formats and "Sheet1!A3" not in driver.formats
+
+
+def test_xlsx_snapshot_prefers_cached_values_over_formula_text(tmp_path: Path):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    ws.append(["A", "Total"])
+    ws.append([2, "=A2*10"])
+    path = tmp_path / "book.xlsx"
+    wb.save(path)
+    # Simulate a cached value as Excel/LibreOffice would store it.
+    import zipfile, shutil
+    tmp = tmp_path / "book2.xlsx"
+    with zipfile.ZipFile(path) as zin, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename == "xl/worksheets/sheet1.xml":
+                data = data.replace(b"<f>A2*10</f><v></v>", b"<f>A2*10</f><v>20</v>").replace(b"<f>A2*10</f>", b"<f>A2*10</f><v>20</v>", 1) if b"<v>20</v>" not in data else data
+            zout.writestr(item, data)
+    shutil.move(tmp, path)
+
+    snapshot = WorkbookDriver.from_path(path).snapshot()
+
+    assert snapshot.sheets["Data"][1] == [2, 20]

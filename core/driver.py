@@ -9,7 +9,7 @@ import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import openpyxl
 from openpyxl.chart import BarChart, LineChart, PieChart, Reference, ScatterChart, Series
@@ -19,8 +19,16 @@ from openpyxl.utils import get_column_letter
 
 from core.manifest import ACTION_TYPES, Manifest
 
-CELL_RE = re.compile(r"^(?P<sheet>[^!]+)!(?P<start>\$?[A-Z]+\$?[0-9]+)(?::(?P<end>\$?[A-Z]+\$?[0-9]+))?$")
+CELL_RE = re.compile(r"^(?P<sheet>[^!]+)!(?P<start>\$?[A-Za-z]+\$?[0-9]+)(?::(?P<end>\$?[A-Za-z]+\$?[0-9]+))?$")
 _REF_RE = re.compile(r"(?<![A-Za-z0-9_\"])(\$?)([A-Z]{1,3})(\$?)([0-9]+)(?![0-9A-Za-z_(])")
+# A1 or A1:B2 with an optional Sheet!/'Sheet Name'! prefix; used for structural row edits.
+_QUALIFIED_REF_RE = re.compile(
+    r"(?<![A-Za-z0-9_\"!])"
+    r"(?:(?P<sheet>'(?:[^']|'')+'|[A-Za-z_][\w.]*)!)?"
+    r"(?P<c1>\$?)(?P<col1>[A-Z]{1,3})(?P<r1>\$?)(?P<row1>[0-9]+)"
+    r"(?::(?P<c2>\$?)(?P<col2>[A-Z]{1,3})(?P<r2>\$?)(?P<row2>[0-9]+))?"
+    r"(?![0-9A-Za-z_(])"
+)
 
 
 @dataclass(frozen=True)
@@ -78,13 +86,22 @@ def parse_range(range_name: str) -> ParsedRange:
         raise ValueError(f"Invalid Calc range: {range_name}")
     start_col, start_row = split_cell(match.group("start"))
     end_col, end_row = split_cell(match.group("end") or match.group("start"))
+    sheet = match.group("sheet").strip()
+    if len(sheet) >= 2 and sheet[0] == sheet[-1] == "'":
+        sheet = sheet[1:-1].replace("''", "'")
     return ParsedRange(
-        sheet=match.group("sheet"),
+        sheet=sheet,
         start_col=min(start_col, end_col),
         start_row=min(start_row, end_row),
         end_col=max(start_col, end_col),
         end_row=max(start_row, end_row),
     )
+
+
+def _map_outside_strings(formula: str, transform: Callable[[str], str]) -> str:
+    """Apply `transform` to the parts of a formula that are not inside double-quoted string literals."""
+    parts = formula.split('"')
+    return '"'.join(transform(part) if index % 2 == 0 else part for index, part in enumerate(parts))
 
 
 def shift_formula_rows(formula: str, offset: int) -> str:
@@ -98,19 +115,80 @@ def shift_formula_rows(formula: str, offset: int) -> str:
             return match.group(0)
         return f"{col_abs}{col}{row_abs}{max(int(row) + offset, 1)}"
 
-    return _REF_RE.sub(repl, formula)
+    return _map_outside_strings(formula, lambda text: _REF_RE.sub(repl, text))
+
+
+def _remap_row(row: int, at: int, count: int, delete: bool) -> int | None:
+    """New 1-based row after inserting/deleting `count` rows at `at`; None if the row was deleted."""
+    if delete:
+        if at <= row < at + count:
+            return None
+        return row - count if row >= at + count else row
+    return row + count if row >= at else row
+
+
+def adjust_formula_for_row_edit(formula: str, formula_sheet: str, target_sheet: str, at: int, count: int, delete: bool) -> str:
+    """Rewrite references into `target_sheet` after rows were inserted/deleted there (spreadsheet semantics)."""
+
+    def repl(match: re.Match[str]) -> str:
+        sheet_token = match.group("sheet")
+        ref_sheet = sheet_token[1:-1].replace("''", "'") if sheet_token and sheet_token.startswith("'") else sheet_token
+        if (ref_sheet or formula_sheet) != target_sheet:
+            return match.group(0)
+        prefix = f"{sheet_token}!" if sheet_token else ""
+        row1 = int(match.group("row1"))
+        if match.group("row2") is None:
+            new_row = _remap_row(row1, at, count, delete)
+            if new_row is None:
+                return "#REF!"
+            return f"{prefix}{match.group('c1')}{match.group('col1')}{match.group('r1')}{new_row}"
+        row2 = int(match.group("row2"))
+        lo, hi = min(row1, row2), max(row1, row2)
+        if delete:
+            if at <= lo and hi < at + count:
+                return "#REF!"
+            new_lo = _remap_row(lo, at, count, True)
+            new_hi = _remap_row(hi, at, count, True)
+            new_lo = at if new_lo is None else new_lo
+            new_hi = at - 1 if new_hi is None else new_hi
+        else:
+            new_lo = _remap_row(lo, at, count, False)
+            new_hi = hi + count if hi >= at else hi
+        return (
+            f"{prefix}{match.group('c1')}{match.group('col1')}{match.group('r1')}{new_lo}"
+            f":{match.group('c2')}{match.group('col2')}{match.group('r2')}{new_hi}"
+        )
+
+    return _map_outside_strings(formula, lambda text: _QUALIFIED_REF_RE.sub(repl, text))
 
 
 def coerce_value(value: str) -> Any:
+    """Turn CSV text into int/float only when the text round-trips exactly, so IDs like 007 or 1e3 survive."""
     if value == "":
         return ""
     try:
-        return int(value)
+        number = int(value)
+        return number if str(number) == value else value
     except ValueError:
         try:
-            return float(value)
+            number = float(value)
         except ValueError:
             return value
+        return number if str(number) == value else value
+
+
+def parse_number(value: Any) -> float | None:
+    """Liberal numeric parse for analysis (accepts '1.50', '1e3', '+91'); never used for writing."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.replace(",", "").strip())
+        except ValueError:
+            return None
+    return None
 
 
 # Backwards-compatible private aliases used by older modules/tests.
@@ -216,14 +294,47 @@ class WorkbookSnapshot:
         return result
 
 
-def _rows_from_worksheet(ws: Any) -> list[list[Any]]:
+def _rows_from_worksheet(ws: Any, cached: dict[tuple[str, int, int], Any] | None = None) -> list[list[Any]]:
     rows: list[list[Any]] = []
-    for row in ws.iter_rows(values_only=True):
-        rows.append(["" if value is None else value for value in row])
+    for r, row in enumerate(ws.iter_rows(values_only=True), start=1):
+        values = []
+        for c, value in enumerate(row, start=1):
+            if cached and isinstance(value, str) and value.startswith("="):
+                hit = cached.get((ws.title, r, c))
+                if hit is not None:
+                    value = hit  # show the model the computed result rather than the formula text
+            values.append("" if value is None else value)
+        rows.append(values)
     # Trim trailing fully-empty rows that openpyxl reports because of formatting.
     while rows and all(value == "" for value in rows[-1]):
         rows.pop()
     return rows
+
+
+def _cached_formula_values(path: Path, wb: Any) -> dict[tuple[str, int, int], Any]:
+    """Read the file a second time with data_only=True to collect cached formula results."""
+    try:
+        values_wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+    except Exception:  # noqa: BLE001 - cached values are a nicety, never fatal
+        return {}
+    cached: dict[tuple[str, int, int], Any] = {}
+    try:
+        for ws in wb.worksheets:
+            if ws.title not in values_wb.sheetnames:
+                continue
+            values_ws = values_wb[ws.title]
+            formula_cells = [(cell.row, cell.column) for row in ws.iter_rows() for cell in row if isinstance(cell.value, str) and cell.value.startswith("=")]
+            if not formula_cells:
+                continue
+            max_row = max(r for r, _ in formula_cells)
+            max_col = max(c for _, c in formula_cells)
+            grid = list(values_ws.iter_rows(min_row=1, max_row=max_row, max_col=max_col, values_only=True))
+            for r, c in formula_cells:
+                if r - 1 < len(grid) and c - 1 < len(grid[r - 1]):
+                    cached[(ws.title, r, c)] = grid[r - 1][c - 1]
+    finally:
+        values_wb.close()
+    return cached
 
 
 def diff_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> list[CellChange]:
@@ -264,6 +375,8 @@ class WorkbookDriver:
         self.active_sheet = active_sheet or workbook.sheetnames[0]
         self.source = source
         self._formats: dict[str, CellFormat] = {}
+        # Cached formula results (sheet, row, col) → value, captured from the file at load time.
+        self._cached_values: dict[tuple[str, int, int], Any] = {}
 
     # ── constructors ──
 
@@ -287,9 +400,12 @@ class WorkbookDriver:
     def from_path(cls, path: str | Path, sheet_name: str | None = None) -> WorkbookDriver:
         path = Path(path)
         if path.suffix.lower() in {".xlsx", ".xlsm"}:
-            wb = openpyxl.load_workbook(path)
+            keep_vba = path.suffix.lower() == ".xlsm"
+            wb = openpyxl.load_workbook(path, keep_vba=keep_vba)
             active = sheet_name if sheet_name in wb.sheetnames else wb.sheetnames[0]
-            return cls(wb, active_sheet=active, source=str(path))
+            driver = cls(wb, active_sheet=active, source=str(path))
+            driver._cached_values = _cached_formula_values(path, wb)
+            return driver
         text = path.read_text(encoding="utf-8-sig")
         driver = cls.from_csv_text(text, sheet_name=sheet_name or "Sheet1")
         driver.source = str(path)
@@ -311,7 +427,7 @@ class WorkbookDriver:
 
     def snapshot(self) -> WorkbookSnapshot:
         return WorkbookSnapshot(
-            sheets={name: _rows_from_worksheet(self.workbook[name]) for name in self.workbook.sheetnames},
+            sheets={name: _rows_from_worksheet(self.workbook[name], self._cached_values) for name in self.workbook.sheetnames},
             source=self.source,
         )
 
@@ -432,10 +548,42 @@ class WorkbookDriver:
                 ws.cell(row=first_data_row + 1 + r_offset, column=parsed.start_col + 1 + c_offset).value = value
 
     def _do_insert_rows(self, action: dict[str, Any]) -> None:
-        self._ws(action["sheet"]).insert_rows(int(action["at"]), int(action.get("count", 1)))
+        sheet, at, count = str(action["sheet"]), int(action["at"]), int(action.get("count", 1))
+        self._ws(sheet).insert_rows(at, count)
+        self._after_row_edit(sheet, at, count, delete=False)
 
     def _do_delete_rows(self, action: dict[str, Any]) -> None:
-        self._ws(action["sheet"]).delete_rows(int(action["at"]), int(action.get("count", 1)))
+        sheet, at, count = str(action["sheet"]), int(action["at"]), int(action.get("count", 1))
+        self._ws(sheet).delete_rows(at, count)
+        self._after_row_edit(sheet, at, count, delete=True)
+
+    def _after_row_edit(self, sheet: str, at: int, count: int, delete: bool) -> None:
+        """openpyxl moves cells but not references: rewrite formulas, highlight keys and cached values."""
+        for ws in self.workbook.worksheets:
+            for row in ws.iter_rows():
+                for cell in row:
+                    if isinstance(cell.value, str) and cell.value.startswith("="):
+                        cell.value = adjust_formula_for_row_edit(cell.value, ws.title, sheet, at, count, delete)
+        remapped: dict[str, CellFormat] = {}
+        for ref, fmt in self._formats.items():
+            ref_sheet, _, cell = ref.rpartition("!")
+            if ref_sheet != sheet:
+                remapped[ref] = fmt
+                continue
+            col, row0 = split_cell(cell)
+            new_row = _remap_row(row0 + 1, at, count, delete)
+            if new_row is not None:
+                remapped[f"{sheet}!{column_name(col)}{new_row}"] = fmt
+        self._formats = remapped
+        cached: dict[tuple[str, int, int], Any] = {}
+        for (c_sheet, r, c), value in self._cached_values.items():
+            if c_sheet != sheet:
+                cached[(c_sheet, r, c)] = value
+                continue
+            new_row = _remap_row(r, at, count, delete)
+            if new_row is not None:
+                cached[(c_sheet, new_row, c)] = value
+        self._cached_values = cached
 
     def _do_clear_range(self, action: dict[str, Any]) -> None:
         parsed = parse_range(action["range"])
