@@ -241,6 +241,7 @@ All `range`, `cell`, and `data_range` values are sheet-qualified A1 references s
 Notes on the file (openpyxl) driver:
 
 - Sheet references are canonicalised on validation: `'My Sheet'!a2:c2` becomes `My Sheet!A2:C2`.
+- Formulas are canonicalised too: a leading `=` is added and Calc-style `;` argument separators become `,` (string literals and array constants untouched); the live driver converts back for Calc. A `formula`/`fill_formula` that references its own cell (e.g. `=IF(J2>I2, "OVER", H2)` written to `H2`) is rejected at validation and the model is asked to try again.
 - `insert_rows`/`delete_rows` rewrite cell and range references in every formula of the workbook (references into deleted rows become `#REF!`), and keep highlight positions in step. Merged cells, defined names, chart ranges, whole-row ranges (`5:10`) and external-workbook references (`[1]Sheet1!A5`) are not adjusted; use `--live` for those.
 - The model sees cached formula results when the file has them (saved by Excel/LibreOffice); files written by openpyxl carry no cached values, so formula cells show their formula text.
 - Formulas that reach outside the workbook (`WEBSERVICE`, `DDE`, `HYPERLINK`, `IMPORT*`) are never blocked, but `analyze`, `batch` and `apply-manifest` warn on stderr before they are applied — including values written with a leading `=`.

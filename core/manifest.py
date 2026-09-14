@@ -279,6 +279,88 @@ def _canonicalise_refs(actions: list[Any]) -> None:
         for field in ("column", "by_column"):
             if isinstance(action.get(field), str):
                 action[field] = action[field].strip().upper()
+        if action.get("type") in {"formula", "fill_formula"} and isinstance(action.get("formula"), str):
+            action["formula"] = canonical_formula(action["formula"])
+
+
+def canonical_formula(formula: str) -> str:
+    """Ensure a leading '=' and Excel-style ',' argument separators.
+
+    Models often emit Calc-style ';' separators; the xlsx grammar only accepts ','. Separators inside string
+    literals and array constants (`{1;2}`) are left alone. The UNO bridge converts back to ';' for Calc.
+    """
+    text = formula.strip()
+    if not text.startswith("="):
+        text = "=" + text
+    out: list[str] = []
+    in_string = False
+    depth = 0
+    for char in text:
+        if char == '"':
+            in_string = not in_string
+        elif not in_string:
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth = max(depth - 1, 0)
+            elif char == ";" and depth == 0:
+                char = ","
+        out.append(char)
+    return "".join(out)
+
+
+_FORMULA_REF_RE = re.compile(
+    r"(?<![A-Za-z0-9_\"!])"
+    r"(?:(?P<sheet>'(?:[^']|'')+'|[A-Za-z_][\w.]*)!)?"
+    r"\$?(?P<col1>[A-Za-z]{1,3})\$?(?P<row1>[0-9]+)"
+    r"(?::\$?(?P<col2>[A-Za-z]{1,3})\$?(?P<row2>[0-9]+))?"
+    r"(?![0-9A-Za-z_(])"
+)
+
+
+def _column_index(letters: str) -> int:
+    index = 0
+    for char in letters.upper():
+        index = index * 26 + (ord(char) - 64)
+    return index
+
+
+def _formula_is_self_referencing(formula: str, sheet: str, col: str, row: int) -> bool:
+    """True when `formula` placed at sheet!col+row references that very cell (directly or via a range)."""
+    target_col = _column_index(col)
+    for index, part in enumerate(formula.split('"')):
+        if index % 2:
+            continue  # inside a string literal
+        for match in _FORMULA_REF_RE.finditer(part):
+            ref_sheet = match.group("sheet")
+            if ref_sheet is not None and canonical_sheet(ref_sheet) != sheet:
+                continue
+            c1, r1 = _column_index(match.group("col1")), int(match.group("row1"))
+            c2 = _column_index(match.group("col2")) if match.group("col2") else c1
+            r2 = int(match.group("row2")) if match.group("row2") else r1
+            if min(c1, c2) <= target_col <= max(c1, c2) and min(r1, r2) <= row <= max(r1, r2):
+                return True
+    return False
+
+
+def _self_reference_error(action: Any) -> str | None:
+    if isinstance(action, Formula):
+        match = RANGE_RE.match(action.cell)
+        if not match:
+            return None
+        col, row = re.match(r"\$?([A-Za-z]+)\$?([0-9]+)", match.group("start")).groups()
+        if _formula_is_self_referencing(action.formula, match.group("sheet"), col, int(row)):
+            return f"formula {action.formula!r} references its own cell {action.cell}; use write_value or reference other cells"
+    if isinstance(action, FillFormula):
+        match = RANGE_RE.match(action.range)
+        if not match:
+            return None
+        col, row = re.match(r"\$?([A-Za-z]+)\$?([0-9]+)", match.group("start")).groups()
+        # The first filled cell stands for the whole range: {row}/{col} placeholders and relative shifts move together.
+        first = action.formula.replace("{row}", row).replace("{col}", col.upper())
+        if _formula_is_self_referencing(first, match.group("sheet"), col, int(row)):
+            return f"formula {action.formula!r} references its own cell within {action.range}; use write_value or reference other cells"
+    return None
 
 
 RISKY_FORMULA_RE = re.compile(r"\b(WEBSERVICE|DDE|HYPERLINK|IMPORTDATA|IMPORTXML|IMPORTHTML|IMPORTRANGE|FILTERXML|ENCODEURL)\s*\(", re.IGNORECASE)
@@ -362,6 +444,9 @@ def validate_manifest(raw: dict[str, Any], sheet_names: set[str]) -> Manifest:
                 errors.append(f"{prefix}: column must be letters like B, got {column!r}")
         if isinstance(action, AddChart) and not CELL_ONLY_RE.match(action.anchor):
             errors.append(f"{prefix}: anchor must be a plain cell like H2, got {action.anchor!r}")
+        circular = _self_reference_error(action)
+        if circular:
+            errors.append(f"{prefix}: {circular}")
     if errors:
         raise ManifestValidationError(errors)
     return manifest

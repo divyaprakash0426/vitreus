@@ -197,3 +197,49 @@ def test_risky_formulas_covers_values_written_as_formulas():
     manifest = validate_manifest(raw, SHEETS)
 
     assert [ref for ref, _ in risky_formulas(manifest)] == ["Sheet1!A1", "Sheet1!B1:B2"]
+
+
+def test_canonical_formula_uses_excel_argument_separators_outside_strings_and_arrays():
+    from core.manifest import canonical_formula
+
+    assert canonical_formula('IF(J2>I2; "a;b"; H3)') == '=IF(J2>I2, "a;b", H3)'
+    assert canonical_formula("=SUM({1;2;3}, A1)") == "=SUM({1;2;3}, A1)"
+    assert canonical_formula("=J2-I2") == "=J2-I2"
+
+
+def test_validate_manifest_normalises_formula_separators():
+    raw = {"summary": "", "actions": [{"type": "fill_formula", "range": "Sheet1!L2:L3", "formula": "=IF(J{row}>I{row}; 1; 0)"}]}
+
+    manifest = validate_manifest(raw, SHEETS)
+
+    assert manifest.actions[0].formula == "=IF(J{row}>I{row}, 1, 0)"
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        {"type": "formula", "cell": "Sheet1!H2", "formula": '=IF(J2>I2, "OVER", H2)'},
+        {"type": "formula", "cell": "Sheet1!B2", "formula": "=SUM(B2:B10)"},
+        {"type": "formula", "cell": "Sheet1!B2", "formula": "=Sheet1!$B$2*2"},
+        {"type": "fill_formula", "range": "Sheet1!H2:H5", "formula": '=IF(J{row}>I{row}, "OVER", H{row})'},
+        {"type": "fill_formula", "range": "Sheet1!H2:H5", "formula": "=H2+1"},
+    ],
+)
+def test_validate_manifest_rejects_formulas_that_reference_their_own_cell(action):
+    with pytest.raises(ManifestValidationError) as exc:
+        validate_manifest({"summary": "", "actions": [action]}, SHEETS)
+
+    assert "references its own cell" in "\n".join(exc.value.errors)
+
+
+def test_validate_manifest_allows_running_totals_and_other_sheet_refs():
+    raw = {
+        "summary": "",
+        "actions": [
+            {"type": "fill_formula", "range": "Sheet1!B2:B10", "formula": "=A2+B1"},
+            {"type": "formula", "cell": "Sheet1!B2", "formula": "=Other!B2"},
+            {"type": "formula", "cell": "Sheet1!B2", "formula": '="B2"'},
+        ],
+    }
+
+    assert len(validate_manifest(raw, SHEETS | {"Other"}).actions) == 3
