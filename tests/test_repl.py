@@ -101,3 +101,14 @@ def test_apply_reports_bridge_failures_and_keeps_the_session_alive():
     text = "\n".join(out)
     assert "Apply failed: Timed out waiting for UNO bridge response" in text
     assert "bye" in text.lower() or "quit" in text.lower() or len(out) >= 3  # session continued to /quit
+
+
+def test_format_manifest_only_hints_at_preview_when_there_are_actions():
+    from core.manifest import validate_manifest
+    from interfaces.repl import _format_manifest
+
+    answer = _format_manifest(validate_manifest({"summary": "Row 3 is over budget.", "actions": []}, {"Sheet1"}))
+    plan = _format_manifest(validate_manifest({"summary": "Flag it.", "actions": [{"type": "write_value", "cell": "Sheet1!H3", "value": "OVER"}]}, {"Sheet1"}))
+
+    assert answer == "Row 3 is over budget."
+    assert plan.endswith("Type /preview to see the diff, /apply to apply.")

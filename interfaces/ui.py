@@ -9,7 +9,7 @@ from typing import Any
 from rich.console import Console
 from rich.table import Table
 
-from core.driver import CellChange, CellFormat, ManifestSummary
+from core.driver import CellChange, CellFormat, ManifestSummary, column_name, split_cell
 from core.manifest import Manifest
 
 console = Console(stderr=True, highlight=False)
@@ -43,6 +43,30 @@ def _fmt(value: Any) -> str:
     return str(value)
 
 
+def compress_highlights(cells: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Merge horizontally contiguous same-colour cells (`S!A3`, `S!B3`, …) into ranges like `S!A3:K3`."""
+    runs: list[tuple[str, str]] = []
+    current: tuple[str, int, int, int, str] | None = None  # sheet, row, first_col, last_col, colour
+    for ref, colour in cells:
+        sheet, _, cell = ref.rpartition("!")
+        col, row = split_cell(cell)
+        if current and current[0] == sheet and current[1] == row and current[4] == colour and col == current[3] + 1:
+            current = (sheet, row, current[2], col, colour)
+            continue
+        if current:
+            runs.append(current)
+        current = (sheet, row, col, col, colour)
+    if current:
+        runs.append(current)
+    out: list[tuple[str, str]] = []
+    for sheet, row, first, last, colour in runs:
+        prefix = f"{sheet}!" if sheet else ""
+        start = f"{column_name(first)}{row + 1}"
+        end = f":{column_name(last)}{row + 1}" if last != first else ""
+        out.append((f"{prefix}{start}{end}", colour))
+    return out
+
+
 def print_diff(changes: list[CellChange], formats: dict[str, CellFormat] | None = None, limit: int = 60) -> None:
     formats = formats or {}
     if not changes and not formats:
@@ -60,11 +84,11 @@ def print_diff(changes: list[CellChange], formats: dict[str, CellFormat] | None 
             table.add_row("…", f"+{len(changes) - limit} more", "", "")
         console.print(table)
     if formats:
-        coloured = [(ref, fmt.background) for ref, fmt in formats.items() if fmt.background]
+        coloured = compress_highlights([(ref, fmt.background) for ref, fmt in formats.items() if fmt.background])
         if coloured:
             preview = ", ".join(f"{ref} [on {bg}]  [/on {bg}]" for ref, bg in coloured[:12])
             more = f" … +{len(coloured) - 12} more" if len(coloured) > 12 else ""
-            console.print(f"[dim]Highlights ({len(coloured)} cells):[/dim] {preview}{more}")
+            console.print(f"[dim]Highlights:[/dim] {preview}{more}")
 
 
 def print_manifest(manifest: Manifest) -> None:

@@ -33,9 +33,8 @@ def _format_manifest(manifest: Manifest) -> str:
         detail = ", ".join(f"{k}={v}" for k, v in data.items())
         suffix = f" — {reason}" if reason else ""
         lines.append(f"  {index}. {action.type} {target} {detail}{suffix}".rstrip())
-    if not manifest.actions:
-        lines.append("  (no actions)")
-    lines.append("Type /preview to see the diff, /apply to apply.")
+    if manifest.actions:
+        lines.append("Type /preview to see the diff, /apply to apply.")
     return "\n".join(lines)
 
 

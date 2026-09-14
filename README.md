@@ -6,6 +6,18 @@
 
 **Vitreus is a local-first spreadsheet intelligence agent powered by Gemma 4.** It inspects XLSX, CSV, stdin, image-derived tables, or live LibreOffice Calc documents, builds compact workbook context, and returns a validated JSON action manifest before anything is applied. The primary product path is private-by-default Ollama with `gemma4:31b`; `--fast` selects the `gemma4:e4b` drafter. Google AI Studio, OpenRouter, and OpenAI-compatible servers such as LM Studio, llama.cpp, or vLLM are optional secondaries; a deterministic fallback handles common review tasks when no model is available.
 
+## 📺 Showcase
+
+![Demo: plan, apply, live Calc, ask](docs/assets/showcase/demo.gif)
+
+| Plan first: proposed actions and cell diff | The applied workbook, rendered by LibreOffice |
+|:---:|:---:|
+| ![Preview of proposed actions](docs/assets/showcase/preview.png) | ![Highlighted rows and REVIEW status in the saved workbook](docs/assets/showcase/workbook.png) |
+| **Live LibreOffice Calc (`--live`)** | **Chat REPL: ask, plan, `/preview`, `/apply`, `/save`** |
+| ![12 actions applied to a running Calc document](docs/assets/showcase/live.png) | ![Chat session adding a Variance column](docs/assets/showcase/chat.png) |
+
+Every step above is a manifest first, then an apply. The recording machine had no GPU, so these were captured with the same Gemma 4 models served by Google AI Studio (`gemma-4-31b-it`; `--fast` selects `gemma-4-26b-a4b-it`); with Ollama running, the identical commands run fully local on `gemma4:31b` / `gemma4:e4b`.
+
 ## Architecture
 
 ```text
@@ -323,6 +335,24 @@ docs/        specs, assets, and challenge writeups
 ```
 
 Package metadata: `vitreus`, Python `>=3.11`, entry point `vitreus = interfaces.cli:app`, runtime deps `pillow`, `pydantic`, `typer`, `rich`, `httpx`, and `openpyxl`.
+
+### Regenerating the showcase
+
+The GIF and terminal screenshots are recorded with [VHS](https://github.com/charmbracelet/vhs); the workbook
+image is rendered by headless LibreOffice so it never contains anything from the desktop.
+
+```bash
+docs/assets/vhs/prepare.sh                     # scratch copies + wrapper in /tmp/vitreus-demo
+vhs docs/assets/vhs/demo.tape                  # demo.gif, preview.png, live.png
+vhs docs/assets/vhs/chat.tape                  # chat.png (delete the by-product chat-scratch.gif)
+uv run vitreus analyze /tmp/vitreus-demo/sales.xlsx --sheet Sales \
+  "Highlight the full rows of reps whose quota attainment is below 90% and write REVIEW in their Status. Also format the Quota_Attainment column as a percentage." \
+  -o /tmp/vitreus-demo/sales-reviewed.xlsx
+uv run docs/assets/vhs/render_workbook.py /tmp/vitreus-demo/sales-reviewed.xlsx Sales \
+  docs/assets/showcase/workbook.png --hide D E F G H I K L
+```
+
+Set `VITREUS_BACKEND`/API keys in the environment before recording if Ollama is not available.
 
 ## Privacy and troubleshooting
 
