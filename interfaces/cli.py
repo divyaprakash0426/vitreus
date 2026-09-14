@@ -43,6 +43,7 @@ SheetOpt = Annotated[Optional[str], typer.Option("--sheet", "-s", help="Sheet to
 AllSheetsOpt = Annotated[bool, typer.Option("--all-sheets", help="Show every sheet in the model context")]
 ContextTokensOpt = Annotated[Optional[int], typer.Option("--context-tokens", help="Token budget for workbook context")]
 ImageOpt = Annotated[Optional[list[Path]], typer.Option("--image", "-i", help="Attach image(s) (receipt, chart) for multimodal reasoning", exists=True, dir_okay=False)]
+PortOpt = Annotated[Optional[int], typer.Option("--port", help="UNO socket port of the live Calc session (with --live)")]
 
 
 # ─── helpers ────────────────────────────────────────────────────────────────
@@ -54,6 +55,7 @@ def _settings(
     fast: bool = False,
     api_key: str | None = None,
     context_tokens: int | None = None,
+    port: int | None = None,
 ) -> Settings:
     overrides: dict[str, Any] = {}
     if backend:
@@ -68,6 +70,8 @@ def _settings(
         overrides["gemini_api_key"] = api_key
     if context_tokens:
         overrides["context_tokens"] = context_tokens
+    if port:
+        overrides["calc_port"] = port
     return load_settings(overrides=overrides, env=os.environ)
 
 
@@ -189,6 +193,7 @@ def analyze(
     preview: Annotated[bool, typer.Option("--preview", "-p", help="Show the cell diff on stderr; never write")] = False,
     live: Annotated[bool, typer.Option("--live", help="Read from and apply to the running LibreOffice Calc document")] = False,
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip the confirmation prompt in --live mode")] = False,
+    port: PortOpt = None,
     sheet: SheetOpt = None,
     all_sheets: AllSheetsOpt = False,
     image: ImageOpt = None,
@@ -212,7 +217,7 @@ def analyze(
         source, query = args
     else:
         _fail('Usage: vitreus analyze <FILE|-> "<query>"  |  vitreus analyze --live "<query>"')
-    settings = _settings(backend, model, fast, api_key, context_tokens)
+    settings = _settings(backend, model, fast, api_key, context_tokens, port)
     driver, snapshot, source_name, manifest, _agent = _plan(query, source, sheet, live, all_sheets, image, settings)
 
     if preview or live:
@@ -254,6 +259,7 @@ def analyze(
 def ask(
     args: Annotated[list[str], typer.Argument(help='[FILE|-] "QUESTION"  (FILE omitted with --live)')],
     live: Annotated[bool, typer.Option("--live", help="Ask about the running LibreOffice Calc document")] = False,
+    port: PortOpt = None,
     sheet: SheetOpt = None,
     all_sheets: AllSheetsOpt = False,
     image: ImageOpt = None,
@@ -270,7 +276,7 @@ def ask(
         source, query = args
     else:
         _fail('Usage: vitreus ask <FILE|-> "<question>"')
-    settings = _settings(backend, model, fast, api_key, context_tokens)
+    settings = _settings(backend, model, fast, api_key, context_tokens, port)
     _driver, _snapshot, _name, manifest, _agent = _plan(query, source, sheet, live, all_sheets, image, settings)
     typer.echo(manifest.summary or "(no answer)")
     if manifest.actions:
@@ -282,6 +288,7 @@ def chat(
     source: Annotated[Optional[str], typer.Argument(help="Workbook path (omit with --live)")] = None,
     live: Annotated[bool, typer.Option("--live", help="Work on the running LibreOffice Calc document")] = False,
     save: Annotated[Optional[Path], typer.Option("--save", help="Default path for /save")] = None,
+    port: PortOpt = None,
     sheet: SheetOpt = None,
     all_sheets: AllSheetsOpt = False,
     backend: BackendOpt = None,
@@ -344,7 +351,15 @@ def batch(
     api_key: ApiKeyOpt = None,
     context_tokens: ContextTokensOpt = None,
 ) -> None:
-    """Run one instruction over many workbooks; prints one JSON line per file."""
+    """Run one instruction over many workbooks; prints one JSON line per file.
+
+    Usage: vitreus batch "INSTRUCTION" FILE [FILE ...]
+    """
+    if Path(query).is_file():
+        _fail(
+            f"First argument must be the instruction, but '{query}' is a file",
+            hint='usage: vitreus batch "INSTRUCTION" FILE [FILE ...]',
+        )
     settings = _settings(backend, model, fast, api_key, context_tokens)
     backend_obj, _ = _backend(settings)
     output_dir.mkdir(parents=True, exist_ok=True)

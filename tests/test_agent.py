@@ -188,8 +188,28 @@ def test_focus_sheets_limits_context_but_tools_reach_other_sheets():
     settings = load_settings(overrides={"backend": "fallback"}, env={})
     agent = SpreadsheetAgent(backend, settings, snapshot, focus_sheets=["Sales"])
 
-    agent.run("Look at expenses")
+    agent.run("Look at the rent figures")
 
     first_user = backend.requests[0][1]["content"]
     assert "Rent" not in first_user and "Other sheets (not shown): Expenses" in first_user
     assert "Rent" in backend.requests[1][-1]["content"]
+
+
+def test_sheets_named_in_the_query_are_added_to_focus():
+    snapshot = WorkbookSnapshot(
+        sheets={
+            "Sales": [["Item", "Amount"], ["A", 1]],
+            "HR_Reviews": [["Employee", "Score"], ["Dennis", 1.8]],
+            "Expenses": [["Item", "Amount"], ["Rent", 900]],
+        }
+    )
+    backend = ScriptedBackend([MANIFEST.replace("Sheet1", "Sales")])
+    settings = load_settings(overrides={"backend": "fallback"}, env={})
+    agent = SpreadsheetAgent(backend, settings, snapshot, focus_sheets=["Sales"])
+
+    agent.run("On the hr_reviews sheet, flag scores below 2.5")
+
+    first_user = backend.requests[0][1]["content"]
+    assert "Dennis" in first_user  # HR_Reviews rendered even though not in focus_sheets
+    assert "Rent" not in first_user  # Expenses stays out of focus
+    assert "Other sheets (not shown): Expenses" in first_user

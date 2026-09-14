@@ -8,6 +8,7 @@ The protocol is prompt-level and model-agnostic. Each model turn is either a too
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -166,9 +167,20 @@ class SpreadsheetAgent:
         if self._context_sent:
             return f"Request: {query}"
         self._context_sent = True
-        sheets = [s for s in (self.focus_sheets or []) if s in self.snapshot.sheets] or None
+        sheets = self._sheets_for_context(query)
         context = build_context(self.snapshot, budget_tokens=self.settings.context_tokens, sheets=sheets, source_name=self.source_name)
         return f"{context}\n\nRequest: {query}"
+
+    def _sheets_for_context(self, query: str) -> list[str] | None:
+        """Focus sheets plus any sheet the user names in the query (case-insensitive)."""
+        if not self.focus_sheets:
+            return None
+        sheets = [s for s in self.focus_sheets if s in self.snapshot.sheets]
+        lowered = query.lower()
+        for name in self.snapshot.sheet_names:
+            if name not in sheets and re.search(rf"(?<![\w]){re.escape(name.lower())}(?![\w])", lowered):
+                sheets.append(name)
+        return sheets or None
 
     def _call_tool(self, name: str, args: dict[str, Any]) -> str:
         try:

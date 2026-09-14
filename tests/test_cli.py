@@ -303,6 +303,18 @@ def test_batch_continues_after_a_bad_file_and_exits_nonzero(tmp_path: Path):
     assert "error" in lines[0] and lines[1]["applied"] == 1
 
 
+def test_batch_rejects_file_path_given_as_instruction(tmp_path: Path):
+    good = tmp_path / "good.csv"
+    good.write_text(CSV, encoding="utf-8")
+
+    result = runner.invoke(app, ["batch", str(good), "Highlight rows that need review", "--output-dir", str(tmp_path / "out")])
+
+    assert result.exit_code == 1
+    assert "first argument must be the instruction" in result.stderr.lower()
+    assert 'vitreus batch "instruction"' in result.stderr.lower()
+    assert not (tmp_path / "out").exists()
+
+
 # ─── vision ─────────────────────────────────────────────────────────────────
 
 
@@ -395,3 +407,23 @@ def test_analyze_live_applies_to_calc_with_yes(monkeypatch):
     payload = json.loads(result.stdout)
     assert payload["applied"] == 1 and payload["target"] == "Budget.ods"
     assert len(FakeUno.applied) == 1
+
+
+def test_analyze_live_port_option_reaches_uno_driver(monkeypatch):
+    seen = {}
+
+    class Dummy:
+        def is_available(self):
+            return False
+
+    def fake_uno(settings):
+        seen["port"] = settings.calc_port
+        return Dummy()
+
+    monkeypatch.setattr("interfaces.cli._uno_driver", fake_uno)
+
+    result = runner.invoke(app, ["analyze", "--live", "--port", "2201", "anything"])
+
+    assert result.exit_code == 1
+    assert seen["port"] == 2201
+    assert "port 2201" in result.stderr
