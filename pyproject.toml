@@ -8,18 +8,13 @@ dependencies = [
     "pillow>=11.0.0",
     "pydantic>=2.10.0",
     "typer>=0.15.0",
+    "httpx>=0.27.0",
+    "openpyxl>=3.1.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.3.0",
-    "openpyxl>=3.1.0",
-]
-integrations = [
-    "ollama>=0.4.0",
-    "pydantic-ai>=0.0.24",
-    "google-genai>=1.0.0",
-    "openpyxl>=3.1.0",
 ]
 
 [project.scripts]
@@ -35,3 +30,4 @@ include = ["core*", "interfaces*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = ["integration: requires a running LibreOffice with UNO support"]
