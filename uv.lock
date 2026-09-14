@@ -474,10 +474,11 @@ dependencies = [
     { name = "openpyxl" },
     { name = "pillow" },
     { name = "pydantic" },
+    { name = "rich" },
     { name = "typer" },
 ]
 
-[package.optional-dependencies]
+[package.dev-dependencies]
 dev = [
     { name = "pytest" },
 ]
@@ -488,7 +489,9 @@ requires-dist = [
     { name = "openpyxl", specifier = ">=3.1.0" },
     { name = "pillow", specifier = ">=11.0.0" },
     { name = "pydantic", specifier = ">=2.10.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.0" },
+    { name = "rich", specifier = ">=13.0.0" },
     { name = "typer", specifier = ">=0.15.0" },
 ]
-provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8.3.0" }]
