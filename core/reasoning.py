@@ -1,9 +1,19 @@
+"""Compatibility layer over `core.agent` for the original Vitreus API.
+
+New code should use `core.backends.make_backend` + `core.agent.SpreadsheetAgent` directly.
+"""
+
 from __future__ import annotations
 
 import json
-import re
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Any
+
+from core import backends as _backends
+from core.agent import SpreadsheetAgent
+from core.config import MODEL_IDS, Settings
+from core.driver import WorkbookSnapshot
+from core.manifest import parse_json_object
 
 
 @dataclass(frozen=True)
@@ -13,64 +23,60 @@ class GemmaModelChoice:
     rationale: str
 
     @classmethod
-    def default(cls) -> "GemmaModelChoice":
+    def default(cls) -> GemmaModelChoice:
         return cls(
             primary="gemma4:31b",
-            drafter="gemma4:4b",
+            drafter="gemma4:e4b",
             rationale=(
                 "Gemma 4 31B Dense is the default because Vitreus needs local, "
                 "long-context workbook reasoning and stronger multimodal planning; "
-                "Gemma 4 4B remains useful as a low-latency drafter on edge hardware."
+                "Gemma 4 E4B remains useful as a low-latency drafter on edge hardware."
             ),
         )
 
 
-class OllamaBackend:
-    """Local Gemma 4 inference via Ollama. Requires: uv sync --extra integrations && ollama pull gemma4:31b"""
-
-    def __init__(self, model: str = "gemma4:31b"):
-        self.model = model
+class _LegacyCallMixin:
+    """Adds the old single-prompt `.call()` entry point on top of the REST backends."""
 
     def call(self, prompt: str) -> str:
-        try:
-            from ollama import chat
-        except ImportError as exc:
-            raise RuntimeError(
-                "Ollama integration requires the 'ollama' package.\n"
-                "  Install: uv sync --extra integrations\n"
-                "  Then pull the model: ollama pull gemma4:31b"
-            ) from exc
-        response = chat(model=self.model, messages=[{"role": "user", "content": prompt}])
-        return response.message.content
+        return self.chat([{"role": "user", "content": prompt}])  # type: ignore[attr-defined]
 
 
-class GoogleAIBackend:
-    """Gemma 4 via Google AI Studio API. Requires: uv sync --extra integrations + GEMINI_API_KEY."""
+class OllamaBackend(_LegacyCallMixin, _backends.OllamaBackend):
+    def __init__(self, model: str = "gemma4:31b", host: str = "http://localhost:11434", **kwargs: Any) -> None:
+        super().__init__(host=host, model=model, **kwargs)
 
-    def __init__(self, api_key: str, model: str = "gemma-4-31b-it"):
-        self.api_key = api_key
-        self.model = model
 
-    def call(self, prompt: str) -> str:
-        try:
-            from google import genai
-        except ImportError as exc:
-            raise RuntimeError(
-                "Google AI Studio integration requires the 'google-genai' package.\n"
-                "  Install: uv sync --extra integrations"
-            ) from exc
-        client = genai.Client(api_key=self.api_key)
-        response = client.models.generate_content(model=self.model, contents=prompt)
-        return response.text
+class GoogleAIBackend(_LegacyCallMixin, _backends.GoogleAIBackend):
+    def __init__(self, api_key: str, model: str = MODEL_IDS["google"]["primary"], **kwargs: Any) -> None:
+        super().__init__(api_key=api_key, model=model, **kwargs)
+
+
+def _snapshot_from_rows(rows: list[dict[str, Any]], sheet_name: str) -> WorkbookSnapshot:
+    if not rows:
+        return WorkbookSnapshot(sheets={sheet_name: []})
+    header = list(rows[0].keys())
+    return WorkbookSnapshot(sheets={sheet_name: [header] + [[row.get(k) for k in header] for row in rows]})
+
+
+class _CallAdapter:
+    """Wraps an object exposing only `.call(prompt)` into the Backend protocol."""
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+        self.name = getattr(inner, "name", "custom")
+        self.model = getattr(inner, "model", "custom")
+
+    def chat(self, messages: list[dict[str, Any]], images: list[bytes] | None = None) -> str:
+        prompt = "\n\n".join(f"[{m['role']}]\n{m['content']}" for m in messages)
+        return str(self._inner.call(prompt))
+
+    def list_models(self) -> list[str]:
+        return []
 
 
 class VitreusReasoning:
-    def __init__(
-        self,
-        use_cloud: bool = False,
-        model_choice: GemmaModelChoice | None = None,
-        backend: Any = None,
-    ):
+    def __init__(self, use_cloud: bool = False, model_choice: GemmaModelChoice | None = None, backend: Any = None) -> None:
         self.use_cloud = use_cloud
         self.model_choice = model_choice or GemmaModelChoice.default()
         self.backend = backend
@@ -80,67 +86,24 @@ class VitreusReasoning:
         rows = json.loads(sheet_context)
         return (
             f"You are Vitreus, a spreadsheet intelligence agent running {model.primary}.\n"
-            f"Analyze the spreadsheet data below and respond with ONLY a valid JSON manifest "
-            f"(no markdown, no explanation).\n\n"
-            f"Task: {user_query}\n\n"
-            f"Sheet data:\n{json.dumps(rows, indent=2)}\n\n"
-            f"Required JSON response shape:\n"
-            f'{{"model": {{"primary": "{model.primary}", "drafter": "{model.drafter}", "rationale": "..."}}, '
-            f'"actions": [{{"type": "highlight|write_value|formula", '
-            f'"range": "Sheet1!A1:B2", "cell": "Sheet1!C2", '
-            f'"value": "...", "formula": "=SUM(A1:A10)", "color": "#f97316", '
-            f'"reason": "why this action is needed"}}]}}'
+            "Analyze the spreadsheet data below and respond with ONLY a valid JSON manifest.\n\n"
+            f"Task: {user_query}\n\nSheet data:\n{json.dumps(rows, indent=2)}\n"
         )
 
     async def plan_action(self, user_query: str, sheet_context: str, sheet_name: str = "Scores") -> dict[str, Any]:
         return self.plan_action_sync(user_query, sheet_context, sheet_name=sheet_name)
 
     def plan_action_sync(self, user_query: str, sheet_context: str, sheet_name: str = "Scores") -> dict[str, Any]:
-        if self.backend is not None:
-            content = self.backend.call(self.build_prompt(user_query, sheet_context))
-            return self.parse_manifest(content)
-        return self._fallback_manifest(user_query, json.loads(sheet_context), sheet_name)
+        snapshot = _snapshot_from_rows(json.loads(sheet_context), sheet_name)
+        backend = self.backend if self.backend is not None else _backends.FallbackBackend()
+        if hasattr(backend, "call"):
+            backend = _CallAdapter(backend)
+        settings = Settings(backend=getattr(backend, "name", "fallback"), primary=self.model_choice.primary, drafter=self.model_choice.drafter)
+        result = SpreadsheetAgent(backend, settings, snapshot).run(user_query)
+        manifest = result.manifest.model_dump(mode="json", exclude_none=True)
+        manifest["model"] = {**manifest.get("model", {}), "primary": self.model_choice.primary, "drafter": self.model_choice.drafter}
+        return manifest
 
     @staticmethod
     def parse_manifest(content: str) -> dict[str, Any]:
-        fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, flags=re.DOTALL)
-        candidate = fenced.group(1) if fenced else content
-        return json.loads(candidate)
-
-    def _fallback_manifest(self, user_query: str, rows: list[dict[str, Any]], sheet_name: str) -> dict[str, Any]:
-        query = user_query.lower()
-        actions: list[dict[str, Any]] = []
-        if "review" in query or "highlight" in query:
-            for index, row in enumerate(rows, start=2):
-                score = _first_numeric(row, preferred_keys=("Score", "score", "Amount", "amount", "Total", "total"))
-                if score is not None and score < 80:
-                    last_column = _column_name(max(len(row) - 1, 0))
-                    actions.append(
-                        {
-                            "type": "highlight",
-                            "range": f"{sheet_name}!A{index}:{last_column}{index}",
-                            "color": "#f97316",
-                            "reason": "Score is below the review threshold of 80.",
-                        }
-                    )
-        return {"model": asdict(self.model_choice), "actions": actions}
-
-
-def _first_numeric(row: dict[str, Any], preferred_keys: tuple[str, ...]) -> float | None:
-    for key in preferred_keys:
-        value = row.get(key)
-        if isinstance(value, int | float):
-            return float(value)
-    for value in row.values():
-        if isinstance(value, int | float):
-            return float(value)
-    return None
-
-
-def _column_name(index: int) -> str:
-    name = ""
-    index += 1
-    while index:
-        index, remainder = divmod(index - 1, 26)
-        name = chr(ord("A") + remainder) + name
-    return name
+        return parse_json_object(content)

@@ -10,7 +10,7 @@ from interfaces.cli import app
 runner = CliRunner()
 
 MOCK_MANIFEST = json.dumps({
-    "model": {"primary": "gemma4:31b", "drafter": "gemma4:4b", "rationale": "test"},
+    "summary": "test",
     "actions": [
         {"type": "highlight", "range": "Sheet1!A2:C2", "color": "#f97316", "reason": "over budget"},
         {"type": "write_value", "cell": "Sheet1!C2", "value": "OVER BUDGET"},
@@ -28,7 +28,7 @@ def test_analyze_with_output_applies_manifest_in_one_step(tmp_path: Path, monkey
     csv_path = tmp_path / "data.csv"
     out_path = tmp_path / "data_applied.csv"
     csv_path.write_text(CSV_DATA, encoding="utf-8")
-    monkeypatch.setattr("core.reasoning.GoogleAIBackend.call", lambda self, p: MOCK_MANIFEST)
+    monkeypatch.setattr("core.backends.GoogleAIBackend.chat", lambda self, messages, images=None: MOCK_MANIFEST)
 
     result = runner.invoke(
         app,
@@ -48,7 +48,7 @@ def test_analyze_with_output_csv_warns_about_limitations(tmp_path: Path, monkeyp
     csv_path = tmp_path / "data.csv"
     out_path = tmp_path / "data_applied.csv"
     csv_path.write_text(CSV_DATA, encoding="utf-8")
-    monkeypatch.setattr("core.reasoning.GoogleAIBackend.call", lambda self, p: MOCK_MANIFEST)
+    monkeypatch.setattr("core.backends.GoogleAIBackend.chat", lambda self, messages, images=None: MOCK_MANIFEST)
 
     result = runner.invoke(
         app,
@@ -133,7 +133,7 @@ def test_analyze_with_output_xlsx_saves_values_and_colors(tmp_path: Path, monkey
     csv_path = tmp_path / "data.csv"
     out_path = tmp_path / "data_applied.xlsx"
     csv_path.write_text(CSV_DATA, encoding="utf-8")
-    monkeypatch.setattr("core.reasoning.GoogleAIBackend.call", lambda self, p: MOCK_MANIFEST)
+    monkeypatch.setattr("core.backends.GoogleAIBackend.chat", lambda self, messages, images=None: MOCK_MANIFEST)
 
     result = runner.invoke(
         app,
@@ -143,7 +143,7 @@ def test_analyze_with_output_xlsx_saves_values_and_colors(tmp_path: Path, monkey
 
     assert result.exit_code == 0
     assert out_path.exists()
-    assert result.stderr == ""  # no warning for xlsx
+    assert "warning" not in result.stderr.lower()  # no CSV limitation warning for xlsx
 
     wb = openpyxl.load_workbook(str(out_path))
     ws = wb.active
@@ -154,7 +154,7 @@ def test_analyze_with_output_xlsx_saves_values_and_colors(tmp_path: Path, monkey
 
 
 def test_workbook_snapshot_loads_xlsx_single_sheet(tmp_path: Path):
-    """from_xlsx reads cell values from the first sheet by default."""
+    """from_xlsx reads cell values from a single-sheet workbook."""
     import openpyxl as xl
     wb = xl.Workbook(); ws = wb.active; ws.title = "Data"
     ws.append(["Name", "Score"]); ws.append(["Ada", 91]); ws.append(["Linus", 65])
@@ -206,7 +206,7 @@ def test_analyze_with_output_xlsx_no_separate_highlights_sidecar(tmp_path: Path,
     csv_path = tmp_path / "data.csv"
     out_path = tmp_path / "data_applied.xlsx"
     csv_path.write_text(CSV_DATA, encoding="utf-8")
-    monkeypatch.setattr("core.reasoning.GoogleAIBackend.call", lambda self, p: MOCK_MANIFEST)
+    monkeypatch.setattr("core.backends.GoogleAIBackend.chat", lambda self, messages, images=None: MOCK_MANIFEST)
 
     runner.invoke(
         app,

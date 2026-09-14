@@ -2,3 +2,18 @@
 # Local-only DEV.to submission drafts
 docs/devto-*.md
 docs/CHALLENGE_SUBMISSION.md
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+
+# Generated working data
+graphify-out/
+*_highlights.json
+/tmp/

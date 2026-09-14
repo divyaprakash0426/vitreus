@@ -1,148 +1,291 @@
-"""TDD tests for OllamaBackend and GoogleAIBackend before implementation."""
+import base64
 import json
-import sys
-import types as stdlib_types
 
+import httpx
 import pytest
 
+from core.backends import (
+    BackendError,
+    FallbackBackend,
+    GoogleAIBackend,
+    OllamaBackend,
+    OpenAICompatibleBackend,
+    make_backend,
+    ollama_reachable,
+)
+from core.config import load_settings
 
-MANIFEST_JSON = json.dumps({
-    "model": {"primary": "gemma4:31b", "drafter": "gemma4:4b", "rationale": "test"},
-    "actions": [{"type": "highlight", "range": "Sheet1!A2:B2", "color": "#f97316", "reason": "test"}],
-})
-
-
-def _fake_ollama_module(content: str) -> stdlib_types.ModuleType:
-    class _Msg:
-        pass
-
-    class _Resp:
-        pass
-
-    msg = _Msg()
-    msg.content = content
-    resp = _Resp()
-    resp.message = msg
-    mod = stdlib_types.ModuleType("ollama")
-    mod.chat = lambda model, messages: resp
-    return mod
+MESSAGES = [
+    {"role": "system", "content": "You are Vitreus."},
+    {"role": "user", "content": "Highlight rows"},
+]
+PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
 
 
-def _fake_genai_module(text: str) -> tuple[stdlib_types.ModuleType, stdlib_types.ModuleType]:
-    class _Resp:
-        pass
-
-    class _Models:
-        def generate_content(self, model, contents):
-            r = _Resp()
-            r.text = text
-            return r
-
-    class _Client:
-        models = _Models()
-
-        def __init__(self, api_key=None):
-            pass
-
-    google_mod = stdlib_types.ModuleType("google")
-    genai_mod = stdlib_types.ModuleType("google.genai")
-    genai_mod.Client = _Client
-    google_mod.genai = genai_mod
-    return google_mod, genai_mod
+def _client(handler) -> httpx.Client:
+    return httpx.Client(transport=httpx.MockTransport(handler))
 
 
-def test_ollama_backend_returns_content_from_ollama_chat(monkeypatch):
-    monkeypatch.setitem(sys.modules, "ollama", _fake_ollama_module(MANIFEST_JSON))
-
-    from core.reasoning import OllamaBackend
-
-    assert OllamaBackend(model="gemma4:31b").call("test prompt") == MANIFEST_JSON
+# ─── Ollama ──────────────────────────────────────────────────────────────────
 
 
-def test_ollama_backend_raises_runtime_error_when_package_missing(monkeypatch):
-    monkeypatch.delitem(sys.modules, "ollama", raising=False)
-    import builtins
+def test_ollama_chat_posts_messages_with_num_ctx_and_returns_content():
+    seen = {}
 
-    original = builtins.__import__
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"message": {"role": "assistant", "content": '{"actions": []}'}})
 
-    def _block(name, *args, **kwargs):
-        if name == "ollama":
-            raise ImportError("No module named 'ollama'")
-        return original(name, *args, **kwargs)
+    backend = OllamaBackend(host="http://localhost:11434", model="gemma4:31b", num_ctx=16384, client=_client(handler))
 
-    monkeypatch.setattr(builtins, "__import__", _block)
-
-    from core.reasoning import OllamaBackend
-
-    with pytest.raises(RuntimeError, match="ollama"):
-        OllamaBackend().call("test")
-
-
-def test_google_ai_backend_returns_text_from_generate_content(monkeypatch):
-    google_mod, genai_mod = _fake_genai_module(MANIFEST_JSON)
-    monkeypatch.setitem(sys.modules, "google", google_mod)
-    monkeypatch.setitem(sys.modules, "google.genai", genai_mod)
-
-    from core.reasoning import GoogleAIBackend
-
-    assert GoogleAIBackend(api_key="test-key").call("test prompt") == MANIFEST_JSON
+    assert backend.chat(MESSAGES) == '{"actions": []}'
+    assert seen["url"] == "http://localhost:11434/api/chat"
+    assert seen["body"]["model"] == "gemma4:31b"
+    assert seen["body"]["stream"] is False
+    assert seen["body"]["options"]["num_ctx"] == 16384
+    assert seen["body"]["messages"][0] == {"role": "system", "content": "You are Vitreus."}
 
 
-def test_google_ai_backend_raises_runtime_error_when_package_missing(monkeypatch):
-    monkeypatch.delitem(sys.modules, "google", raising=False)
-    monkeypatch.delitem(sys.modules, "google.genai", raising=False)
-    import builtins
+def test_ollama_grows_num_ctx_to_fit_long_prompts():
+    seen = {}
 
-    original = builtins.__import__
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"message": {"content": "{}"}})
 
-    def _block(name, *args, **kwargs):
-        if name in ("google", "google.genai"):
-            raise ImportError(f"No module named '{name}'")
-        return original(name, *args, **kwargs)
+    backend = OllamaBackend(host="http://localhost:11434", model="gemma4:31b", num_ctx=4096, client=_client(handler))
+    backend.chat([{"role": "user", "content": "x" * 40000}])
 
-    monkeypatch.setattr(builtins, "__import__", _block)
-
-    from core.reasoning import GoogleAIBackend
-
-    with pytest.raises(RuntimeError, match="google-genai"):
-        GoogleAIBackend(api_key="key").call("test")
+    assert seen["body"]["options"]["num_ctx"] >= 12000
 
 
-def test_reasoning_with_injected_backend_calls_backend_and_parses_manifest():
-    from core.reasoning import VitreusReasoning
+def test_ollama_attaches_base64_images_to_last_user_message():
+    seen = {}
 
-    class _MockBackend:
-        def call(self, prompt: str) -> str:
-            return MANIFEST_JSON
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"message": {"content": "{}"}})
 
-    reasoning = VitreusReasoning(backend=_MockBackend())
-    result = reasoning.plan_action_sync(
-        "Highlight anything",
-        json.dumps([{"Name": "Ada", "Score": 91}]),
+    OllamaBackend(host="http://h", model="m", client=_client(handler)).chat(MESSAGES, images=[PNG])
+
+    assert seen["body"]["messages"][-1]["images"] == [base64.b64encode(PNG).decode()]
+
+
+def test_ollama_missing_model_maps_to_backend_error_with_pull_hint():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"error": "model 'gemma4:31b' not found"})
+
+    with pytest.raises(BackendError) as excinfo:
+        OllamaBackend(host="http://h", model="gemma4:31b", client=_client(handler)).chat(MESSAGES)
+
+    assert "ollama pull gemma4:31b" in excinfo.value.hint
+
+
+def test_ollama_connection_error_maps_to_backend_error_with_serve_hint():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused")
+
+    with pytest.raises(BackendError) as excinfo:
+        OllamaBackend(host="http://h", model="m", client=_client(handler)).chat(MESSAGES)
+
+    assert "ollama serve" in excinfo.value.hint
+
+
+def test_ollama_list_models_reads_tags():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/tags"
+        return httpx.Response(200, json={"models": [{"name": "gemma4:31b"}, {"name": "gemma4:e4b"}]})
+
+    assert OllamaBackend(host="http://h", model="m", client=_client(handler)).list_models() == ["gemma4:31b", "gemma4:e4b"]
+
+
+def test_ollama_reachable_probe_true_and_false():
+    ok = _client(lambda r: httpx.Response(200, json={"models": []}))
+    assert ollama_reachable("http://h", client=ok) is True
+
+    def down(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused")
+
+    assert ollama_reachable("http://h", client=_client(down)) is False
+
+
+# ─── Google AI Studio ────────────────────────────────────────────────────────
+
+
+def test_google_posts_system_instruction_contents_and_image_parts():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["key_header"] = request.headers.get("x-goog-api-key")
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": "reply"}]}}]})
+
+    backend = GoogleAIBackend(api_key="secret", model="gemma-4-31b-it", client=_client(handler))
+
+    assert backend.chat(MESSAGES + [{"role": "assistant", "content": "ok"}, {"role": "user", "content": "go"}], images=[PNG]) == "reply"
+    assert seen["url"].startswith("https://generativelanguage.googleapis.com/v1beta/models/gemma-4-31b-it:generateContent")
+    assert seen["key_header"] == "secret" and "secret" not in seen["url"]
+    assert seen["body"]["systemInstruction"]["parts"][0]["text"] == "You are Vitreus."
+    roles = [c["role"] for c in seen["body"]["contents"]]
+    assert roles == ["user", "model", "user"]
+    last_parts = seen["body"]["contents"][-1]["parts"]
+    assert last_parts[0]["text"] == "go"
+    assert last_parts[1]["inline_data"]["mime_type"] == "image/png"
+
+
+def test_google_http_error_maps_to_backend_error_with_key_hint():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"error": {"message": "API key not valid"}})
+
+    with pytest.raises(BackendError) as excinfo:
+        GoogleAIBackend(api_key="bad", model="m", client=_client(handler)).chat(MESSAGES)
+
+    assert "API key not valid" in str(excinfo.value)
+    assert "GEMINI_API_KEY" in excinfo.value.hint
+
+
+def test_google_list_models_filters_gemma():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"models": [{"name": "models/gemma-4-31b-it"}, {"name": "models/gemini-2.5-pro"}]})
+
+    assert GoogleAIBackend(api_key="k", model="m", client=_client(handler)).list_models() == ["gemma-4-31b-it"]
+
+
+# ─── OpenAI-compatible (OpenRouter, LM Studio, llama.cpp, vLLM) ──────────────
+
+
+def test_openai_compatible_posts_chat_completions_with_bearer_and_image_url():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["headers"] = dict(request.headers)
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"choices": [{"message": {"content": "hi"}}]})
+
+    backend = OpenAICompatibleBackend(
+        base_url="https://openrouter.ai/api/v1", api_key="or-key", model="google/gemma-4-31b-it", name="openrouter",
+        client=_client(handler),
     )
-    assert result == json.loads(MANIFEST_JSON)
+
+    assert backend.chat(MESSAGES, images=[PNG]) == "hi"
+    assert seen["url"] == "https://openrouter.ai/api/v1/chat/completions"
+    assert seen["headers"]["authorization"] == "Bearer or-key"
+    assert seen["body"]["model"] == "google/gemma-4-31b-it"
+    content = seen["body"]["messages"][-1]["content"]
+    assert content[0] == {"type": "text", "text": "Highlight rows"}
+    assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
 
 
-def test_reasoning_without_backend_uses_deterministic_fallback():
-    from core.reasoning import VitreusReasoning
+def test_openai_compatible_without_images_sends_plain_string_content():
+    seen = {}
 
-    result = VitreusReasoning().plan_action_sync(
-        "Highlight rows that need review",
-        json.dumps([{"Name": "Linus", "Score": 72}]),
-        sheet_name="Sheet1",
-    )
-    assert result["actions"][0]["type"] == "highlight"
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"choices": [{"message": {"content": "hi"}}]})
+
+    OpenAICompatibleBackend(base_url="http://localhost:1234/v1/", api_key=None, model="m", client=_client(handler)).chat(MESSAGES)
+
+    assert seen["body"]["messages"][-1]["content"] == "Highlight rows"
 
 
-def test_build_prompt_contains_task_model_name_and_sheet_data():
-    from core.driver import WorkbookSnapshot
-    from core.reasoning import VitreusReasoning
+def test_openai_compatible_error_maps_to_backend_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(402, json={"error": {"message": "Insufficient credits"}})
 
-    snapshot = WorkbookSnapshot(sheets={"Sheet1": [["Item", "Total"], ["Coffee", 4.5]]})
-    prompt = VitreusReasoning().build_prompt(
-        "Explain totals", snapshot.range_to_json("Sheet1!A1:B2")
-    )
+    with pytest.raises(BackendError, match="Insufficient credits"):
+        OpenAICompatibleBackend(base_url="http://h/v1", api_key="k", model="m", client=_client(handler)).chat(MESSAGES)
 
-    assert "Explain totals" in prompt
-    assert "gemma4:31b" in prompt
-    assert "Coffee" in prompt
+
+def test_openai_compatible_list_models():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/models"
+        return httpx.Response(200, json={"data": [{"id": "google/gemma-4-31b-it"}, {"id": "other"}]})
+
+    backend = OpenAICompatibleBackend(base_url="http://h/v1", api_key="k", model="m", client=_client(handler))
+
+    assert backend.list_models() == ["google/gemma-4-31b-it", "other"]
+
+
+# ─── Fallback + factory ──────────────────────────────────────────────────────
+
+
+def test_fallback_backend_refuses_chat():
+    with pytest.raises(BackendError):
+        FallbackBackend().chat(MESSAGES)
+
+
+def test_make_backend_auto_prefers_reachable_ollama():
+    settings = load_settings(env={"GEMINI_API_KEY": "k"})
+
+    backend, reason = make_backend(settings, ollama_probe=lambda host: True)
+
+    assert isinstance(backend, OllamaBackend)
+    assert backend.model == "gemma4:31b"
+    assert "Ollama" in reason
+
+
+def test_make_backend_auto_falls_back_to_google_then_openrouter():
+    google, _ = make_backend(load_settings(env={"GEMINI_API_KEY": "k"}), ollama_probe=lambda host: False)
+    assert isinstance(google, GoogleAIBackend) and google.model == "gemma-4-31b-it"
+
+    openrouter, _ = make_backend(load_settings(env={"OPENROUTER_API_KEY": "k"}), ollama_probe=lambda host: False)
+    assert isinstance(openrouter, OpenAICompatibleBackend)
+    assert openrouter.name == "openrouter" and openrouter.model == "google/gemma-4-31b-it"
+    assert openrouter.extra_headers["X-Title"] == "Vitreus"
+
+
+def test_make_backend_openai_uses_base_url_and_model_from_settings():
+    settings = load_settings(env={"OPENAI_BASE_URL": "http://localhost:1234/v1", "OPENAI_MODEL": "gemma-4-e4b"})
+
+    backend, _ = make_backend(settings, ollama_probe=lambda host: False)
+
+    assert isinstance(backend, OpenAICompatibleBackend)
+    assert backend.base_url == "http://localhost:1234/v1" and backend.model == "gemma-4-e4b"
+
+
+def test_make_backend_explicit_google_without_key_raises_actionable_error():
+    with pytest.raises(BackendError) as excinfo:
+        make_backend(load_settings(overrides={"backend": "google"}, env={}), ollama_probe=lambda host: False)
+
+    assert "GEMINI_API_KEY" in excinfo.value.hint
+
+
+def test_make_backend_fallback_when_nothing_configured():
+    backend, reason = make_backend(load_settings(env={}), ollama_probe=lambda host: False)
+
+    assert isinstance(backend, FallbackBackend)
+    assert "fallback" in reason.lower()
+
+
+def test_ollama_rounds_num_ctx_to_16k_steps_to_avoid_model_reloads():
+    seen = {}
+
+    def handler(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"message": {"role": "assistant", "content": "{}"}})
+
+    backend = OllamaBackend(host="http://localhost:11434", model="gemma4:31b", num_ctx=32768, client=_client(handler))
+    backend.chat([{"role": "user", "content": "x" * (35000 * 3)}])
+    first = seen["body"]["options"]["num_ctx"]
+    backend.chat([{"role": "user", "content": "x" * (44000 * 3)}])
+    second = seen["body"]["options"]["num_ctx"]
+
+    assert first == second == 49152
+
+
+def test_google_sends_api_key_in_header_not_url():
+    seen = {}
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        seen["header"] = request.headers.get("x-goog-api-key")
+        return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": "{}"}]}}]})
+
+    backend = GoogleAIBackend(api_key="sk-secret", model="gemma-4-31b-it", client=_client(handler))
+    backend.chat([{"role": "user", "content": "hi"}])
+
+    assert seen["header"] == "sk-secret"
+    assert "sk-secret" not in seen["url"]
