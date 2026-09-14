@@ -87,14 +87,14 @@ def launch_calc(
     executable = "soffice" if shutil.which("soffice") else "libreoffice"
     command = [
         executable,
-        "--invisible",
         "--norestore",
         "--nologo",
-        "--nodefault",
         f"--accept=socket,host=localhost,port={port};urp;StarOffice.ComponentContext",
     ]
     if headless:
-        command.insert(1, "--headless")
+        command[1:1] = ["--headless", "--invisible", "--nodefault"]
+    elif not file:
+        command.append("--calc")  # visible mode with no file: open an empty Calc document
     if user_profile:
         profile_path = Path(user_profile).expanduser().resolve()
         profile_path.mkdir(parents=True, exist_ok=True)

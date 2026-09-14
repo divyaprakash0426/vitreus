@@ -194,3 +194,21 @@ def test_normalize_formula_converts_argument_commas_to_semicolons_outside_string
     assert _normalize_formula("=SUM(B2:B10)") == "=SUM(B2:B10)"
     assert _normalize_formula("=SUM(A1;B1)") == "=SUM(A1;B1)"
     assert _normalize_formula("plain text") == "plain text"
+
+
+def test_launch_calc_visible_mode_opens_calc_window(monkeypatch):
+    from core.uno_driver import launch_calc
+
+    captured = {}
+
+    class FakePopen:
+        def __init__(self, args, **kwargs):
+            captured["args"] = args
+
+    monkeypatch.setattr(subprocess, "Popen", FakePopen)
+
+    launch_calc(port=2002)
+    assert "--calc" in captured["args"] and "--invisible" not in captured["args"] and "--headless" not in captured["args"]
+
+    launch_calc("budget.xlsx", port=2002)
+    assert captured["args"][-1] == "budget.xlsx" and "--calc" not in captured["args"]
