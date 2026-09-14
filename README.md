@@ -66,7 +66,7 @@ Settings resolve as CLI overrides, environment, config file, then defaults. `aut
 | Google AI Studio | `--backend google`, `VITREUS_BACKEND=google` | `GEMINI_API_KEY` | `gemma-4-31b-it`; fast `gemma-4-26b-a4b-it` | Optional hosted Gemma; `--api-key` maps to this key. |
 | OpenRouter | `--backend openrouter`, `VITREUS_BACKEND=openrouter` | `OPENROUTER_API_KEY` | `google/gemma-4-31b-it`; fast `google/gemma-4-26b-a4b-it` | Optional hosted OpenAI-compatible route. |
 | OpenAI-compatible | `--backend openai`, `VITREUS_BACKEND=openai` | `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL` | `gemma-4-31b-it` | For LM Studio, llama.cpp, vLLM, or any `/v1/chat/completions` server. |
-| Fallback | `--backend fallback` | none | `rules` | Rule-based planner for common numeric comparisons/review highlights; returns empty manifests for unsupported asks. |
+| Fallback | `--backend fallback` | none | `rules` | Rule-based planner for numeric comparisons (`X exceeds Y`, `Score below 60`, `files over 1 MB`) and review highlights; returns empty manifests for unsupported asks. |
 
 ## CLI reference
 
@@ -241,10 +241,10 @@ All `range`, `cell`, and `data_range` values are sheet-qualified A1 references s
 Notes on the file (openpyxl) driver:
 
 - Sheet references are canonicalised on validation: `'My Sheet'!a2:c2` becomes `My Sheet!A2:C2`.
-- `insert_rows`/`delete_rows` rewrite cell and range references in every formula of the workbook (references into deleted rows become `#REF!`), and keep highlight positions in step. Merged cells, defined names and chart ranges are not adjusted; use `--live` for those.
+- `insert_rows`/`delete_rows` rewrite cell and range references in every formula of the workbook (references into deleted rows become `#REF!`), and keep highlight positions in step. Merged cells, defined names, chart ranges, whole-row ranges (`5:10`) and external-workbook references (`[1]Sheet1!A5`) are not adjusted; use `--live` for those.
 - The model sees cached formula results when the file has them (saved by Excel/LibreOffice); files written by openpyxl carry no cached values, so formula cells show their formula text.
-- Formulas that reach outside the workbook (`WEBSERVICE`, `DDE`, `HYPERLINK`, `IMPORT*`) are never blocked, but `analyze` warns on stderr before you apply them.
-- CSV output keeps cell text exactly as read (`007`, `1e3`, `+91` stay strings); highlight colours go to a `<name>_highlights.json` sidecar and other formatting is dropped.
+- Formulas that reach outside the workbook (`WEBSERVICE`, `DDE`, `HYPERLINK`, `IMPORT*`) are never blocked, but `analyze`, `batch` and `apply-manifest` warn on stderr before they are applied — including values written with a leading `=`.
+- CSV input is typed like a spreadsheet import: plain integers and decimals become numbers (`12.50` → `12.5`), while codes such as `007`, `1e3`, `+91` and `nan` stay text. Thousands-separated text (`1,234.00`) is sorted and summarised numerically but stored as text. Highlight colours go to a `<name>_highlights.json` sidecar and other formatting is dropped on CSV output.
 
 ## Configuration
 

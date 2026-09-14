@@ -6,7 +6,7 @@ import csv
 import io
 from typing import Any
 
-from core.driver import WorkbookSnapshot, column_name
+from core.driver import WorkbookSnapshot, column_name, parse_number
 
 HEAD_ROWS = 20
 TAIL_ROWS = 5
@@ -28,6 +28,10 @@ def _kind(value: Any) -> str:
         return "float"
     if isinstance(value, str) and value.startswith("="):
         return "formula"
+    if isinstance(value, str):
+        number = parse_number(value)
+        if number is not None:
+            return "int" if number.is_integer() and "." not in value else "float"
     return "text"
 
 
@@ -40,7 +44,7 @@ def describe_sheet(snapshot: WorkbookSnapshot, sheet: str) -> dict[str, Any]:
         name = str(header[c]) if c < len(header) and header[c] != "" else ""
         values = [row[c] for row in rows[1:] if c < len(row)]
         kinds = {_kind(v) for v in values} - {"empty"}
-        numeric = [float(v) for v in values if isinstance(v, (int, float)) and not isinstance(v, bool)]
+        numeric = [n for n in (parse_number(v) for v in values if not isinstance(v, bool) and not (isinstance(v, str) and v.startswith("="))) if n is not None]
         if not kinds:
             col_type = "empty"
         elif kinds <= {"int"}:

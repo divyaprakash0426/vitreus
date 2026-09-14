@@ -155,9 +155,13 @@ def _plan(
         _fail(str(exc).split("\n")[0], hint=getattr(exc, "hint", ""))
     if result.tool_calls:
         ui.info(f"{result.steps} step(s), tools used: {', '.join(c['tool'] for c in result.tool_calls)}")
-    for target, formula in risky_formulas(result.manifest):
-        ui.warn(f"{target}: formula reaches outside the workbook ({formula[:80]}). Review before applying.")
+    _warn_risky(result.manifest)
     return driver, snapshot, source_name, result.manifest, agent
+
+
+def _warn_risky(manifest: Manifest, prefix: str = "") -> None:
+    for target, formula in risky_formulas(manifest):
+        ui.warn(f"{prefix}{target}: formula reaches outside the workbook ({formula[:80]}). Review before applying.")
 
 
 def _preview(manifest: Manifest, snapshot: WorkbookSnapshot) -> ManifestSummary:
@@ -334,6 +338,7 @@ def apply_manifest(
         _fail(f"Manifest is not valid JSON: {exc}")
     except ManifestValidationError as exc:
         _fail("Manifest is invalid:\n  " + "\n  ".join(exc.errors))
+    _warn_risky(manifest)
     summary = driver.execute_manifest(manifest)
     payload: dict[str, Any] = {"applied": summary.applied, "errors": summary.errors}
     if output is not None:
@@ -380,6 +385,7 @@ def batch(
             agent = SpreadsheetAgent(backend_obj, settings, snapshot, source_name=file.name, focus_sheets=focus)
             with ui.status(f"{file.name}: reasoning…"):
                 result = agent.run(query)
+            _warn_risky(result.manifest, prefix=f"{file.name} ")
             summary = driver.execute_manifest(result.manifest)
             target = output_dir / f"{file.stem}.xlsx"
             driver.save(target)

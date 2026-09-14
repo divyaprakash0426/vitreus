@@ -345,7 +345,8 @@ def test_csv_round_trip_preserves_ids_zip_codes_and_exponent_strings(tmp_path: P
     out = tmp_path / "out.csv"
     driver.save(out)
 
-    assert out.read_text(encoding="utf-8").splitlines()[1] == "007,02134,+91 98,1e3,1.50"
+    # Plain decimals normalise (1.50 → 1.5) exactly as a spreadsheet import would; codes stay text.
+    assert out.read_text(encoding="utf-8").splitlines()[1] == "007,02134,+91 98,1e3,1.5"
 
 
 def test_parse_range_accepts_quoted_sheets_and_lowercase_cells():
@@ -406,3 +407,25 @@ def test_xlsx_snapshot_prefers_cached_values_over_formula_text(tmp_path: Path):
     snapshot = WorkbookDriver.from_path(path).snapshot()
 
     assert snapshot.sheets["Data"][1] == [2, 20]
+
+
+def test_coerce_value_accepts_plain_decimals_but_not_ids_or_nan():
+    from core.driver import coerce_value
+
+    assert coerce_value("12.50") == 12.5 and coerce_value("100.00") == 100.0 and coerce_value("-0.5") == -0.5
+    assert coerce_value("007") == "007" and coerce_value("+91") == "+91" and coerce_value("1e3") == "1e3"
+    assert coerce_value("nan") == "nan" and coerce_value("inf") == "inf" and coerce_value("01.5") == "01.5"
+
+
+def test_sort_range_orders_numeric_text_numerically():
+    driver = WorkbookDriver.from_csv_text('Item,Amount\na,12.50\nb,"1,234.00"\nc,7.25\nd,50\n')
+
+    driver.execute_manifest({"actions": [{"type": "sort_range", "range": "Sheet1!A1:B5", "by_column": "B", "descending": True}]})
+
+    assert [r[1] for r in driver.snapshot().sheets["Sheet1"][1:]] == ["1,234.00", 50, 12.5, 7.25]
+
+
+def test_row_edit_rewrites_lowercase_refs():
+    from core.driver import adjust_formula_for_row_edit
+
+    assert adjust_formula_for_row_edit("=sum(a5:a9)+b10", "S", "S", 2, 1, True) == "=sum(a4:a8)+b9"

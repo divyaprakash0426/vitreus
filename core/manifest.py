@@ -288,9 +288,15 @@ def risky_formulas(manifest: Manifest) -> list[tuple[str, str]]:
     """(target, formula) pairs for formulas that reach outside the workbook (web, DDE, links)."""
     found: list[tuple[str, str]] = []
     for action in manifest.actions:
-        formula = getattr(action, "formula", None)
-        if formula and RISKY_FORMULA_RE.search(formula):
-            found.append((getattr(action, "cell", None) or getattr(action, "range", ""), formula))
+        target = getattr(action, "cell", None) or getattr(action, "range", "")
+        candidates: list[Any] = [getattr(action, "formula", None), getattr(action, "value", None)]
+        for row in getattr(action, "values", None) or []:
+            candidates.extend(row if isinstance(row, list) else [row])
+        for text in candidates:
+            # Values starting with '=' are executed as formulas by both drivers.
+            if isinstance(text, str) and text.startswith("=") and RISKY_FORMULA_RE.search(text):
+                found.append((target, text))
+                break
     return found
 
 

@@ -471,3 +471,27 @@ def test_analyze_warns_about_formulas_that_reach_outside_the_workbook(tmp_path: 
     assert result.exit_code == 0, result.output
     assert "reaches outside the workbook" in result.stderr
     assert json.loads(result.stdout)["actions"][0]["formula"].startswith("=WEBSERVICE")
+
+
+def test_apply_manifest_warns_about_risky_values(tmp_path: Path):
+    csv_path = tmp_path / "sheet.csv"
+    manifest_path = tmp_path / "manifest.json"
+    csv_path.write_text("Name,Score\nAda,91\n", encoding="utf-8")
+    manifest_path.write_text(json.dumps({"actions": [{"type": "write_value", "cell": "Sheet1!C2", "value": '=WEBSERVICE("http://x")'}]}), encoding="utf-8")
+
+    result = runner.invoke(app, ["apply-manifest", str(csv_path), str(manifest_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "reaches outside the workbook" in result.stderr
+
+
+def test_batch_warns_about_risky_formulas(tmp_path: Path, monkeypatch):
+    (tmp_path / "a.csv").write_text(CSV, encoding="utf-8")
+    manifest = json.dumps({"summary": "link", "actions": [{"type": "formula", "cell": "Sheet1!D2", "formula": '=WEBSERVICE("http://evil")', "reason": "r"}]})
+    monkeypatch.setattr("core.backends.GoogleAIBackend.chat", lambda self, messages, images=None: manifest)
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+
+    result = runner.invoke(app, ["batch", "pull data", str(tmp_path / "a.csv"), "--output-dir", str(tmp_path / "out"), "--backend", "google"])
+
+    assert result.exit_code == 0, result.output
+    assert "a.csv" in result.stderr and "reaches outside the workbook" in result.stderr

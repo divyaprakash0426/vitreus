@@ -70,3 +70,15 @@ def test_comparison_rule_supports_plain_numbers_and_percent():
 
     assert [a["range"] for a in spent["actions"]] == ["Sheet1!A2:C2", "Sheet1!A4:C4"]
     assert [a["range"] for a in margin["actions"]] == ["Sheet1!A3:C3"]
+
+
+def test_comparison_rule_supports_below_and_less_than():
+    snapshot = WorkbookSnapshot(sheets={"S": [["Name", "Score", "Budget", "Spent"], ["Ada", 91, 100, 120], ["Bob", 55, 100, 40], ["Cy", 60, 100, 100]]})
+
+    below = plan_fallback("highlight rows where score is below 60", snapshot, "S")
+    less = plan_fallback("Highlight rows where Spent is less than Budget", snapshot, "S")
+
+    assert [a["range"] for a in below["actions"]] == ["S!A3:D3"]
+    assert "Score (55) is below 60" in below["actions"][0]["reason"]
+    assert [a["range"] for a in less["actions"]] == ["S!A3:D3"]
+    assert "below" in less["summary"]

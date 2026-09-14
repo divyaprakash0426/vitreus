@@ -181,3 +181,19 @@ def test_risky_formulas_are_reported():
     manifest = validate_manifest(raw, SHEETS)
 
     assert [ref for ref, _ in risky_formulas(manifest)] == ["Sheet1!A2", "Sheet1!C1:C2"]
+
+
+def test_risky_formulas_covers_values_written_as_formulas():
+    from core.manifest import risky_formulas
+
+    raw = {
+        "summary": "",
+        "actions": [
+            {"type": "write_value", "cell": "Sheet1!A1", "value": '=WEBSERVICE("http://x")'},
+            {"type": "write_range", "range": "Sheet1!B1:B2", "values": [["ok"], ['=DDE("a";"b";"c")']]},
+            {"type": "write_value", "cell": "Sheet1!A2", "value": "plain"},
+        ],
+    }
+    manifest = validate_manifest(raw, SHEETS)
+
+    assert [ref for ref, _ in risky_formulas(manifest)] == ["Sheet1!A1", "Sheet1!B1:B2"]

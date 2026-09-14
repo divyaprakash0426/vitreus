@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import math
 import re
 import sys
 from dataclasses import dataclass, field
@@ -20,13 +21,13 @@ from openpyxl.utils import get_column_letter
 from core.manifest import ACTION_TYPES, Manifest
 
 CELL_RE = re.compile(r"^(?P<sheet>[^!]+)!(?P<start>\$?[A-Za-z]+\$?[0-9]+)(?::(?P<end>\$?[A-Za-z]+\$?[0-9]+))?$")
-_REF_RE = re.compile(r"(?<![A-Za-z0-9_\"])(\$?)([A-Z]{1,3})(\$?)([0-9]+)(?![0-9A-Za-z_(])")
+_REF_RE = re.compile(r"(?<![A-Za-z0-9_\"])(\$?)([A-Za-z]{1,3})(\$?)([0-9]+)(?![0-9A-Za-z_(])")
 # A1 or A1:B2 with an optional Sheet!/'Sheet Name'! prefix; used for structural row edits.
 _QUALIFIED_REF_RE = re.compile(
     r"(?<![A-Za-z0-9_\"!])"
     r"(?:(?P<sheet>'(?:[^']|'')+'|[A-Za-z_][\w.]*)!)?"
-    r"(?P<c1>\$?)(?P<col1>[A-Z]{1,3})(?P<r1>\$?)(?P<row1>[0-9]+)"
-    r"(?::(?P<c2>\$?)(?P<col2>[A-Z]{1,3})(?P<r2>\$?)(?P<row2>[0-9]+))?"
+    r"(?P<c1>\$?)(?P<col1>[A-Za-z]{1,3})(?P<r1>\$?)(?P<row1>[0-9]+)"
+    r"(?::(?P<c2>\$?)(?P<col2>[A-Za-z]{1,3})(?P<r2>\$?)(?P<row2>[0-9]+))?"
     r"(?![0-9A-Za-z_(])"
 )
 
@@ -162,19 +163,22 @@ def adjust_formula_for_row_edit(formula: str, formula_sheet: str, target_sheet: 
     return _map_outside_strings(formula, lambda text: _QUALIFIED_REF_RE.sub(repl, text))
 
 
+_PLAIN_INT_RE = re.compile(r"^-?(?:0|[1-9][0-9]*)$")
+_PLAIN_DECIMAL_RE = re.compile(r"^-?(?:0|[1-9][0-9]*)\.[0-9]+$")
+
+
 def coerce_value(value: str) -> Any:
-    """Turn CSV text into int/float only when the text round-trips exactly, so IDs like 007 or 1e3 survive."""
+    """Turn CSV text into a number only for plain integers/decimals (`42`, `-3`, `12.50`).
+
+    IDs and codes such as `007`, `+91`, `1e3`, `nan` stay text so they survive a CSV round-trip.
+    """
     if value == "":
         return ""
-    try:
-        number = int(value)
-        return number if str(number) == value else value
-    except ValueError:
-        try:
-            number = float(value)
-        except ValueError:
-            return value
-        return number if str(number) == value else value
+    if _PLAIN_INT_RE.match(value):
+        return int(value)
+    if _PLAIN_DECIMAL_RE.match(value):
+        return float(value)
+    return value
 
 
 def parse_number(value: Any) -> float | None:
@@ -185,9 +189,10 @@ def parse_number(value: Any) -> float | None:
         return float(value)
     if isinstance(value, str):
         try:
-            return float(value.replace(",", "").strip())
+            number = float(value.replace(",", "").strip())
         except ValueError:
             return None
+        return number if math.isfinite(number) else None
     return None
 
 
@@ -643,8 +648,9 @@ class WorkbookDriver:
 def _sort_key(value: Any) -> tuple[int, Any]:
     if value is None or value == "":
         return (2, "")
-    if isinstance(value, (int, float)):
-        return (0, value)
+    number = parse_number(value)
+    if number is not None:
+        return (0, number)
     return (1, str(value).lower())
 
 

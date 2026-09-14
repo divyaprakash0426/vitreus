@@ -14,7 +14,7 @@ from core.driver import WorkbookSnapshot, column_name, parse_number
 REVIEW_COLOR = "#f97316"
 REVIEW_THRESHOLD = 80.0
 _COMPARISON = re.compile(
-    r"(?P<left>[A-Za-z_][\w ]*?)\s+(?:is\s+)?(?:exceeds?|over|above|greater than|more than|higher than|>)\s+"
+    r"(?P<left>[A-Za-z_][\w ]*?)\s+(?:is\s+)?(?P<op>exceeds?|over|above|greater than|more than|higher than|>|below|under|less than|lower than|<)\s+"
     r"(?P<right>\d[\d,]*(?:\.\d+)?\s*(?:[kKmMgGtT][bB]?|%)?|[A-Za-z_][\w ]*?)(?=[\s,.;]|$)",
     re.IGNORECASE,
 )
@@ -31,6 +31,7 @@ _UNIT_MULTIPLIER = {
     "%": 1,
     "": 1,
 }
+_BELOW_OPS = {"below", "under", "less than", "lower than", "<"}
 # Column names that "files/rows/items over N" most plausibly refer to when the left word is not a header.
 _SIZE_LIKE = ("size", "bytes", "amount", "total", "value", "count")
 
@@ -79,6 +80,8 @@ def plan_fallback(query: str, snapshot: WorkbookSnapshot, sheet: str) -> dict[st
 
     comparison = _COMPARISON.search(query)
     if comparison:
+        below = comparison.group("op").lower() in _BELOW_OPS
+        verb = "is below" if below else "exceeds"
         left_idx = _match_column(comparison.group("left").split()[-1], lookup)
         right_text = comparison.group("right").strip()
         threshold = _parse_threshold(right_text)
@@ -98,7 +101,7 @@ def plan_fallback(query: str, snapshot: WorkbookSnapshot, sheet: str) -> dict[st
                     right = _number(row[right_idx]) if right_idx < len(row) else None
                 else:
                     right = threshold
-                if left is None or right is None or left <= right:
+                if left is None or right is None or (left >= right if below else left <= right):
                     continue
                 right_shown = f"{right_name} ({right:g})" if right_idx is not None else right_name
                 actions.append(
@@ -106,13 +109,13 @@ def plan_fallback(query: str, snapshot: WorkbookSnapshot, sheet: str) -> dict[st
                         "type": "highlight",
                         "range": f"{sheet}!A{row_no}:{last_col}{row_no}",
                         "color": REVIEW_COLOR,
-                        "reason": f"{left_name} ({left:g}) exceeds {right_shown}.",
+                        "reason": f"{left_name} ({left:g}) {verb} {right_shown}.",
                     }
                 )
                 if write and write_idx is not None:
                     actions.append({"type": "write_value", "cell": f"{sheet}!{column_name(write_idx)}{row_no}", "value": write.group("value").strip()})
             return {
-                "summary": f"Fallback planner (no model backend): {len([a for a in actions if a['type'] == 'highlight'])} row(s) where {left_name} exceeds {right_name}.",
+                "summary": f"Fallback planner (no model backend): {len([a for a in actions if a['type'] == 'highlight'])} row(s) where {left_name} {verb} {right_name}.",
                 "actions": actions,
             }
 

@@ -94,3 +94,12 @@ def test_build_context_handles_empty_sheet():
 
     assert '## Sheet "Empty"' in text
     assert "0 rows x 0 columns" in text
+
+
+def test_describe_sheet_treats_numeric_text_as_numbers():
+    snapshot = WorkbookSnapshot(sheets={"S": [["Amount"], ["1,234.50"], [7.25], ["12"]]})
+
+    column = describe_sheet(snapshot, "S")["columns"][0]
+
+    assert column["type"] == "float"
+    assert column["min"] == 7.25 and column["max"] == 1234.5
