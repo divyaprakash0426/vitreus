@@ -80,12 +80,7 @@ def analyze(
     driver.execute_manifest(manifest)
     summary_applied = len([a for a in manifest.get("actions", []) if a.get("type") in ("write_value", "formula", "highlight")])
 
-    ext = output.suffix.lower()
-    if ext == ".xlsx":
-        snapshot.save_xlsx(str(output), sheet_name=active_sheet, formats=driver.formats)
-    else:
-        # CSV: save data; colors go to a sidecar.
-        snapshot.save_csv(str(output), sheet_name=active_sheet)
+    if output.suffix.lower() != ".xlsx":
         typer.echo(
             f"⚠ CSV format cannot store cell colors or formulas.\n"
             f"  • write_value changes are saved in {output.name}\n"
@@ -93,15 +88,7 @@ def analyze(
             f"  Tip: use --output result.xlsx to preserve everything in one file.",
             err=True,
         )
-        if driver.formats:
-            sidecar = output.parent / (output.stem + "_highlights.json")
-            sidecar.write_text(
-                json.dumps(
-                    {cell: {"background": fmt.background} for cell, fmt in driver.formats.items()},
-                    indent=2,
-                ),
-                encoding="utf-8",
-            )
+    driver.save(output)
 
     typer.echo(json.dumps({"applied": summary_applied, "saved": str(output), "errors": []}))
 
@@ -130,21 +117,8 @@ def apply_manifest(
     summary = driver.execute_manifest(manifest)
 
     if output is not None:
-        ext = output.suffix.lower()
-        if ext == ".xlsx":
-            snapshot.save_xlsx(str(output), sheet_name=active_sheet, formats=driver.formats)
-            typer.echo(f"Saved: {output}", err=True)
-        else:
-            snapshot.save_csv(str(output), sheet_name=active_sheet)
-            if driver.formats:
-                sidecar = output.parent / (output.stem + "_highlights.json")
-                sidecar.write_text(
-                    json.dumps({cell: {"background": fmt.background} for cell, fmt in driver.formats.items()}, indent=2),
-                    encoding="utf-8",
-                )
-                typer.echo(f"Saved: {output}  |  Highlights: {sidecar}", err=True)
-            else:
-                typer.echo(f"Saved: {output}", err=True)
+        written = driver.save(output)
+        typer.echo("Saved: " + "  |  ".join(str(p) for p in written), err=True)
 
     typer.echo(json.dumps({"applied": summary.applied, "errors": summary.errors}))
 
