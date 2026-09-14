@@ -101,10 +101,10 @@ def _column_summary(info: dict[str, Any]) -> str:
     return parts[0]
 
 
-def build_context(snapshot: WorkbookSnapshot, budget_tokens: int = 24000, sheets: list[str] | None = None) -> str:
+def build_context(snapshot: WorkbookSnapshot, budget_tokens: int = 24000, sheets: list[str] | None = None, source_name: str | None = None) -> str:
     all_names = list(snapshot.sheets)
     chosen = [name for name in (sheets or all_names) if name in snapshot.sheets] or all_names
-    header = f"# Workbook: {snapshot.source or 'workbook'} ({len(all_names)} sheet{'s' if len(all_names) != 1 else ''}: {', '.join(all_names)})"
+    header = f"# Workbook: {source_name or snapshot.source or 'workbook'} ({len(all_names)} sheet{'s' if len(all_names) != 1 else ''}: {', '.join(all_names)})"
     parts = [header]
     hidden = [name for name in all_names if name not in chosen]
     if hidden:

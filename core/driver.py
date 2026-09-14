@@ -130,7 +130,9 @@ class WorkbookSnapshot:
     source: str = ""
 
     @classmethod
-    def from_xlsx(cls, path: str, sheet_name: str | None = None, all_sheets: bool = False) -> WorkbookSnapshot:
+    def from_xlsx(cls, path: str, sheet_name: str | None = None, all_sheets: bool = True) -> WorkbookSnapshot:
+        """Load an .xlsx. All sheets are loaded by default so agent tools can reach them;
+        pass all_sheets=False to keep only `sheet_name` (or the first sheet)."""
         wb = openpyxl.load_workbook(path, data_only=False)
         if all_sheets:
             names = wb.sheetnames
@@ -156,6 +158,10 @@ class WorkbookSnapshot:
     def from_csv_text(cls, text: str, sheet_name: str = "Sheet1") -> WorkbookSnapshot:
         rows = [[coerce_value(value) for value in row] for row in csv.reader(io.StringIO(text))]
         return cls(sheets={sheet_name: rows}, source="stdin")
+
+    @property
+    def sheet_names(self) -> list[str]:
+        return list(self.sheets.keys())
 
     def dims(self, sheet_name: str) -> tuple[int, int]:
         rows = self.sheets.get(sheet_name, [])

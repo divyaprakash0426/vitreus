@@ -154,7 +154,7 @@ def test_analyze_with_output_xlsx_saves_values_and_colors(tmp_path: Path, monkey
 
 
 def test_workbook_snapshot_loads_xlsx_single_sheet(tmp_path: Path):
-    """from_xlsx reads cell values from the first sheet by default."""
+    """from_xlsx reads cell values from a single-sheet workbook."""
     import openpyxl as xl
     wb = xl.Workbook(); ws = wb.active; ws.title = "Data"
     ws.append(["Name", "Score"]); ws.append(["Ada", 91]); ws.append(["Linus", 65])

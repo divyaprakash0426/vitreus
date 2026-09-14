@@ -48,3 +48,26 @@ def test_context_payload_contains_task_model_name_and_sheet_data():
     assert "Explain totals" in prompt
     assert "gemma4:31b" in prompt
     assert "Coffee" in prompt
+
+
+def test_model_choice_uses_e4b_drafter():
+    assert GemmaModelChoice.default().drafter == "gemma4:e4b"
+
+
+def test_plan_action_sync_uses_real_backend_when_given(monkeypatch):
+    class Scripted:
+        name = "scripted"
+        model = "m"
+
+        def chat(self, messages, images=None):
+            return '{"summary": "ok", "actions": [{"type": "write_value", "cell": "Scores!C1", "value": "hi"}]}'
+
+        def list_models(self):
+            return []
+
+    snapshot = WorkbookSnapshot(sheets={"Scores": [["Name", "Score"], ["Ada", 91]]})
+
+    manifest = VitreusReasoning(backend=Scripted()).plan_action_sync("Say hi", snapshot.range_to_json("Scores!A1:B2"), "Scores")
+
+    assert manifest["actions"][0]["cell"] == "Scores!C1"
+    assert manifest["model"]["backend"] == "scripted"
