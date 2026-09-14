@@ -14,10 +14,36 @@ from core.driver import WorkbookSnapshot, coerce_value, column_name
 REVIEW_COLOR = "#f97316"
 REVIEW_THRESHOLD = 80.0
 _COMPARISON = re.compile(
-    r"(?P<left>[A-Za-z_][\w ]*?)\s+(?:is\s+)?(?:exceeds?|over|above|greater than|more than|higher than|>)\s+(?P<right>[A-Za-z_][\w ]*?)(?=[\s,.;]|$)",
+    r"(?P<left>[A-Za-z_][\w ]*?)\s+(?:is\s+)?(?:exceeds?|over|above|greater than|more than|higher than|>)\s+"
+    r"(?P<right>\d[\d,]*(?:\.\d+)?\s*(?:[kKmMgGtT][bB]?|%)?|[A-Za-z_][\w ]*?)(?=[\s,.;]|$)",
     re.IGNORECASE,
 )
 _WRITE = re.compile(r"""write\s+["']?(?P<value>[^"']+?)["']?\s+(?:in|to|into)\s+(?:the\s+)?(?P<column>[A-Za-z_][\w ]*?)(?:\s+column)?(?=[\s,.;]|$)""", re.IGNORECASE)
+_UNIT_MULTIPLIER = {
+    "k": 1_000,
+    "m": 1_000_000,
+    "g": 1_000_000_000,
+    "t": 1_000_000_000_000,
+    "kb": 1024,
+    "mb": 1024**2,
+    "gb": 1024**3,
+    "tb": 1024**4,
+    "%": 1,
+    "": 1,
+}
+# Column names that "files/rows/items over N" most plausibly refer to when the left word is not a header.
+_SIZE_LIKE = ("size", "bytes", "amount", "total", "value", "count")
+
+
+def _parse_threshold(text: str) -> float | None:
+    """'1 MB' → 1048576, '1.5k' → 1500, '10%' → 10, '100' → 100; None if not numeric."""
+    match = re.fullmatch(r"\s*(\d[\d,]*(?:\.\d+)?)\s*([A-Za-z%]*)\s*", text)
+    if not match:
+        return None
+    unit = match.group(2).lower()
+    if unit not in _UNIT_MULTIPLIER:
+        return None
+    return float(match.group(1).replace(",", "")) * _UNIT_MULTIPLIER[unit]
 
 
 def _header_lookup(header: list[Any]) -> dict[str, int]:
@@ -59,23 +85,33 @@ def plan_fallback(query: str, snapshot: WorkbookSnapshot, sheet: str) -> dict[st
     comparison = _COMPARISON.search(query)
     if comparison:
         left_idx = _match_column(comparison.group("left").split()[-1], lookup)
-        right_idx = _match_column(comparison.group("right").split()[0], lookup)
-        if left_idx is not None and right_idx is not None:
-            left_name, right_name = header[left_idx], header[right_idx]
+        right_text = comparison.group("right").strip()
+        threshold = _parse_threshold(right_text)
+        right_idx = None if threshold is not None else _match_column(right_text.split()[0], lookup)
+        if left_idx is None and threshold is not None:
+            # "files over 1 MB": no header named 'files' → fall back to the first size-like numeric column.
+            left_idx = next((lookup[k] for k in _SIZE_LIKE if k in lookup), None)
+        if left_idx is not None and (right_idx is not None or threshold is not None):
+            left_name = header[left_idx]
+            right_name = header[right_idx] if right_idx is not None else right_text
             write = _WRITE.search(query)
             write_idx = _match_column(write.group("column"), lookup) if write else None
             actions: list[dict[str, Any]] = []
             for row_no, row in enumerate(body, start=2):
                 left = _number(row[left_idx]) if left_idx < len(row) else None
-                right = _number(row[right_idx]) if right_idx < len(row) else None
+                if right_idx is not None:
+                    right = _number(row[right_idx]) if right_idx < len(row) else None
+                else:
+                    right = threshold
                 if left is None or right is None or left <= right:
                     continue
+                right_shown = f"{right_name} ({right:g})" if right_idx is not None else right_name
                 actions.append(
                     {
                         "type": "highlight",
                         "range": f"{sheet}!A{row_no}:{last_col}{row_no}",
                         "color": REVIEW_COLOR,
-                        "reason": f"{left_name} ({left:g}) exceeds {right_name} ({right:g}).",
+                        "reason": f"{left_name} ({left:g}) exceeds {right_shown}.",
                     }
                 )
                 if write and write_idx is not None:

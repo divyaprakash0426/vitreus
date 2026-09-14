@@ -146,6 +146,21 @@ def test_fallback_backend_uses_rule_planner_without_chat():
     assert result.steps == 0
 
 
+def test_fallback_backend_plans_on_the_focused_sheet():
+    settings = load_settings(overrides={"backend": "fallback"}, env={})
+    snapshot = WorkbookSnapshot(
+        sheets={
+            "Sales": [["Item", "Amount"], ["A", 1]],
+            "Expenses": [["Item", "Budget", "Spent"], ["Rent", 900, 950], ["Food", 200, 150]],
+        }
+    )
+    agent = SpreadsheetAgent(FallbackBackend(), settings, snapshot, focus_sheets=["Expenses"])
+
+    result = agent.run("Highlight rows where Spent exceeds Budget")
+
+    assert [a.range for a in result.manifest.actions] == ["Expenses!A2:C2"]
+
+
 def test_chat_mode_keeps_history_and_refresh_updates_context():
     agent, backend = make_agent([MANIFEST, MANIFEST])
 

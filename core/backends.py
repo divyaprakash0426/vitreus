@@ -111,7 +111,7 @@ class OllamaBackend:
         except httpx.ConnectError as exc:
             raise BackendError(
                 f"Cannot reach Ollama at {self.host}: {exc}",
-                hint="start it with `ollama serve` (or set VITREUS_OLLAMA_HOST / --backend google|openrouter)",
+                hint="start it with `ollama serve` (or set OLLAMA_HOST / --backend google|openrouter)",
             ) from exc
         except httpx.HTTPError as exc:
             raise BackendError(f"Ollama request failed: {exc}", hint="check `ollama ps` and the server log") from exc

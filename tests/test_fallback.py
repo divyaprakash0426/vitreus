@@ -51,3 +51,22 @@ def test_unknown_request_returns_empty_actions_with_reasoning():
 
     assert manifest["actions"] == []
     assert "no model backend" in manifest["summary"].lower()
+
+
+def test_comparison_rule_supports_numeric_thresholds_with_units():
+    snapshot = WorkbookSnapshot.from_csv_text("name,size\nsmall.txt,512\nbig.bin,2097152\nmid.csv,1048577\n")
+
+    manifest = plan_fallback("highlight files over 1 MB", snapshot, "Sheet1")
+
+    assert [a["range"] for a in manifest["actions"]] == ["Sheet1!A3:B3", "Sheet1!A4:B4"]
+    assert "1 MB" in manifest["actions"][0]["reason"] or "1048576" in manifest["actions"][0]["reason"]
+
+
+def test_comparison_rule_supports_plain_numbers_and_percent():
+    snapshot = WorkbookSnapshot.from_csv_text("Name,Spent,Margin\nA,120,5\nB,80,12\nC,150,-2\n")
+
+    spent = plan_fallback("Highlight rows where Spent exceeds 100", snapshot, "Sheet1")
+    margin = plan_fallback("flag rows where Margin is above 10%", snapshot, "Sheet1")
+
+    assert [a["range"] for a in spent["actions"]] == ["Sheet1!A2:C2", "Sheet1!A4:C4"]
+    assert [a["range"] for a in margin["actions"]] == ["Sheet1!A3:C3"]

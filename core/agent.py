@@ -142,7 +142,8 @@ class SpreadsheetAgent:
     # ── helpers ──────────────────────────────────────────────────────────
 
     def _run_fallback(self, query: str) -> AgentResult:
-        sheet = self.snapshot.sheet_names[0] if self.snapshot.sheet_names else "Sheet1"
+        focused = self._sheets_for_context(query) or self.snapshot.sheet_names
+        sheet = focused[0] if focused else "Sheet1"
         raw = plan_fallback(query, self.snapshot, sheet)
         manifest = validate_manifest(raw, self.snapshot.sheet_names)
         manifest.model = self._model_info(rationale="No model backend available; deterministic rule-based planner.")
