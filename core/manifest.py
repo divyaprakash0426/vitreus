@@ -210,25 +210,45 @@ class ManifestValidationError(ValueError):
         super().__init__("; ".join(errors))
 
 
-def parse_json_object(text: str) -> dict[str, Any]:
-    """Return the first balanced JSON object in `text`, tolerating fences and prose."""
+PREFERRED_KEYS = ("actions", "tool", "rows")
+
+
+def parse_json_object(text: str, prefer_keys: tuple[str, ...] = PREFERRED_KEYS) -> dict[str, Any]:
+    """Return the most plausible JSON object in `text`.
+
+    Models may emit reasoning prose (sometimes containing braces) before the real answer, so
+    every balanced top-level object is collected and the last one carrying a preferred key
+    (`actions`, `tool`, `rows`) wins; otherwise the first object is returned.
+    """
     fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, flags=re.DOTALL)
     if fenced:
         try:
-            return json.loads(fenced.group(1))
+            candidate = json.loads(fenced.group(1))
+            if isinstance(candidate, dict) and any(key in candidate for key in prefer_keys):
+                return candidate
         except json.JSONDecodeError:
             pass
     decoder = json.JSONDecoder()
-    for index, char in enumerate(text):
-        if char != "{":
-            continue
+    candidates: list[dict[str, Any]] = []
+    index = 0
+    while True:
+        index = text.find("{", index)
+        if index == -1:
+            break
         try:
-            obj, _ = decoder.raw_decode(text[index:])
+            obj, end = decoder.raw_decode(text[index:])
         except json.JSONDecodeError:
+            index += 1
             continue
         if isinstance(obj, dict):
-            return obj
-    raise ValueError("No JSON object found in model reply")
+            candidates.append(obj)
+        index += max(end, 1)
+    if not candidates:
+        raise ValueError("No JSON object found in model reply")
+    for candidate in reversed(candidates):
+        if any(key in candidate for key in prefer_keys):
+            return candidate
+    return candidates[0]
 
 
 def _check_ref(ref: str, known: set[str], field: str, prefix: str, errors: list[str]) -> None:

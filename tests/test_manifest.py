@@ -132,3 +132,19 @@ def test_schema_text_documents_every_action_type():
     for action_type in ACTION_TYPES:
         assert action_type in text
     assert "{row}" in text
+
+
+def test_parse_json_object_prefers_last_manifest_like_object_after_reasoning_prose():
+    text = (
+        'The user wants {"type": "highlight"} rows... I will think about it.\n'
+        'Draft: {"note": "not this"}\n'
+        '{"summary": "done", "actions": [{"type": "highlight", "range": "Sheet1!A2:B2"}]}'
+    )
+
+    assert parse_json_object(text)["summary"] == "done"
+
+
+def test_parse_json_object_prefers_tool_call_object_over_incidental_objects():
+    text = 'Let me check the data first. {"tool": "get_range", "args": {"range": "Sheet1!A1:B5"}}'
+
+    assert parse_json_object(text)["tool"] == "get_range"
